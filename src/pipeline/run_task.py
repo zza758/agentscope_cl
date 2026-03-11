@@ -274,12 +274,9 @@ class TaskRunner:
         if not strategy_note:
             strategy_note = "可作为后续相似任务的参考经验。"
 
-        final_answer = clean_final_answer(
-            raw_answer,
-            expose_reasoning=self.ablation_cfg.get("expose_reasoning", True),
-        )
+        # memory_summary 来自结构化解析，不再走旧的 regex 清洗
+        memory_summary = memory_summary.strip()
 
-        memory_answer = clean_answer_for_memory(final_answer)
         memory_record = MemoryRecord(
             experiment_id=self.experiment_id,
             task_id=task_id,
@@ -299,27 +296,12 @@ class TaskRunner:
             relevance_score=None,
         )
 
-        experience = "本轮任务完成后，后续遇到相似问题可优先参考此答案结构与调用到的知识。"
-
         if (
                 self.ablation_cfg.get("use_memory", True)
                 and self.ablation_cfg.get("use_memory_write", True)
                 and self.memory_manager is not None
         ):
             self.memory_manager.write_memory(memory_record)
-
-            if self.ablation_cfg.get("use_memory_logging", True):
-                self.mysql_logger.log_memory(
-                    task_run_id=task_run_id,
-                    memory_key=f"task:{task_id}:write",
-                    operation_type="write",
-                    memory_content=(
-                        f"任务: {query}\n"
-                        f"答案: {memory_answer}\n"
-                        f"经验: {experience}"
-                    ),
-                    relevance_score=None,
-                )
 
         latency_ms = int((time.time() - start_time) * 1000)
         self.mysql_logger.update_task_result(

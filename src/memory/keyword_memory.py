@@ -60,7 +60,26 @@ class KeywordMemoryManager(BaseMemoryManager):
                 if not line:
                     continue
                 record = json.loads(line)
+
+                # 兼容旧格式：如果没有 memory_summary，则退化为 content / answer
+                if "memory_summary" not in record:
+                    fallback_summary = record.get("content") or record.get("answer") or ""
+                    record["memory_summary"] = fallback_summary
+
+                if "answer_raw" not in record:
+                    record["answer_raw"] = record.get("answer", record.get("content", ""))
+
+                if "strategy_note" not in record:
+                    record["strategy_note"] = record.get(
+                        "experience",
+                        "可作为后续相似任务的参考经验。",
+                    )
+
+                if "content" not in record:
+                    record["content"] = record.get("memory_summary", "")
+
                 self._memory_bank.append(record)
+
                 self._memory_keys.add(
                     self._build_key(
                         record.get("experiment_id", ""),
@@ -135,8 +154,6 @@ class KeywordMemoryManager(BaseMemoryManager):
                         "task_id": mem.get("task_id"),
                         "task_order": mem.get("task_order"),
                         "query": mem.get("query"),
-                        "answer": mem.get("answer"),
-                        "experience": mem.get("experience"),
                         "content": content,
                         "score": float(overlap),
                         "created_at": mem.get("created_at"),
