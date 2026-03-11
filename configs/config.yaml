@@ -1,0 +1,71 @@
+app:
+  project_name: "agentscope_cl"
+  experiment_name: "stage1_baseline"
+  debug: true
+
+model:
+  provider: "dashscope"
+  model_name: "qwen-plus"
+  temperature: 0.3
+  max_tokens: 1500
+  stream: false
+
+database:
+  host: "127.0.0.1"
+  port: 3306
+  user: "root"
+  database: "agentscope_cl"
+  charset: "utf8mb4"
+
+knowledge_base:
+  kb_path: "data/kb/docs.jsonl"
+  top_k: 3
+  score_threshold: 1.0
+
+memory:
+  enabled: true
+  backend: "vector"         # "keyword" / "vector"
+  persistent: true
+  deduplicate: true
+  top_k: 3
+  write_memory_after_task: true
+  storage_path: "data/memory/memory_bank.jsonl"
+
+embedding:
+  enabled: true
+  provider: "dashscope"
+  model_name: "text-embedding-v4"
+  batch_size: 16
+  normalize: true
+
+ablation:
+  use_knowledge_base: true      # 是否允许调用知识库工具。
+  use_memory: true              # 是否读取历史经验
+  use_memory_write: true        # 任务结束后是否写入新经验。
+  use_memory_persistence: true  # 是否从磁盘加载/保存 memory
+  use_retrieval_logging: true
+  use_memory_logging: true
+  use_vector_memory: true       # memory 检索走关键词还是向量
+  use_contrastive_rerank: true  # 加对比学习重排器
+  use_rl_policy: false          # 加强化学习策略控制
+  expose_reasoning: true        # 最终答案里是否保留中间推理说明
+
+contrastive:
+  enabled: true
+  train_enabled: true
+  rerank_enabled: true
+
+  train_data_path: "data/contrastive/memory_contrastive_samples.jsonl"
+  output_dir: "outputs/contrastive"
+  model_dir: "outputs/contrastive/contrastive_encoder"
+
+  model_name_or_path: "bert-base-chinese"
+  max_length: 128
+  batch_size: 8
+  num_epochs: 3
+  learning_rate: 2e-5
+  margin: 0.2
+  hidden_size: 768
+
+  candidate_top_k: 5
+  final_top_k: 3

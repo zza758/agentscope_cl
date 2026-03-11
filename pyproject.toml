@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentscope_cl"
+version = "0.1.0"
+description = "AgentScope CL Project"
+requires-python = ">=3.8"
+
+[tool.setuptools.packages.find]
+where = ["."]  # 从当前目录开始查找
+include = ["src*"]  # 只打包 src 开头的文件夹（即 src 及其子模块）

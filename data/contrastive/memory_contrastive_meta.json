@@ -1,0 +1,12 @@
+{
+  "num_samples": 2,
+  "fields": [
+    "task_id",
+    "query",
+    "positive_memory",
+    "negative_memory",
+    "source",
+    "negative_type"
+  ],
+  "description": "Memory contrastive dataset for continual learning reranking."
+}
