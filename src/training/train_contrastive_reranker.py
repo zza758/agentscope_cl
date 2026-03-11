@@ -3,11 +3,6 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
-# 把 src 目录加入 Python 搜索路径
-SRC_ROOT = Path(__file__).resolve().parents[1]
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
-
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -41,8 +36,8 @@ class ContrastiveMemoryDataset(Dataset):
         item = self.records[idx]
         return {
             "query": item["query"],
-            "positive": item["positive_memory"],
-            "negative": item["negative_memory"],
+            "positive": item.get("positive_memory_summary", item.get("positive_memory", "")),
+            "negative": item.get("negative_memory_summary", item.get("negative_memory", "")),
         }
 
 

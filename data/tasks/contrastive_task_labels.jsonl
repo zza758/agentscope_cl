@@ -1,0 +1,15 @@
+{"experiment_id":"exp_train_001","group_id":"zhangsan","task_id":"task_001","task_order":1,"query":"请总结张三项目的核心目标。","support_memory_task_ids":[]}
+{"experiment_id":"exp_train_001","group_id":"lisi","task_id":"task_002","task_order":2,"query":"请总结李四项目的核心目标。","support_memory_task_ids":[]}
+{"experiment_id":"exp_train_001","group_id":"mike","task_id":"task_003","task_order":3,"query":"Please summarize the core goals of Mike's project.","support_memory_task_ids":[]}
+{"experiment_id":"exp_train_001","group_id":"jack","task_id":"task_004","task_order":4,"query":"Please summarize the core goals of Jack's project.","support_memory_task_ids":[]}
+
+{"experiment_id":"exp_train_001","group_id":"zhangsan","task_id":"task_005","task_order":5,"query":"继续概括一下张三项目的主要目标与重点。","support_memory_task_ids":["task_001"]}
+{"experiment_id":"exp_train_001","group_id":"lisi","task_id":"task_006","task_order":6,"query":"继续概括一下李四项目的主要目标与重点。","support_memory_task_ids":["task_002"]}
+{"experiment_id":"exp_train_001","group_id":"mike","task_id":"task_007","task_order":7,"query":"Further summarize Mike's project goals and key modules.","support_memory_task_ids":["task_003"]}
+{"experiment_id":"exp_train_001","group_id":"jack","task_id":"task_008","task_order":8,"query":"Further summarize Jack's project goals and key highlights.","support_memory_task_ids":["task_004"]}
+
+{"experiment_id":"exp_train_001","group_id":"compare_cn","task_id":"task_009","task_order":9,"query":"请比较张三项目与李四项目在持续学习设计上的侧重点。","support_memory_task_ids":["task_005","task_006"]}
+{"experiment_id":"exp_train_001","group_id":"compare_en","task_id":"task_010","task_order":10,"query":"Compare Mike's project and Jack's project in terms of memory strategy and system focus.","support_memory_task_ids":["task_007","task_008"]}
+
+{"experiment_id":"exp_train_001","group_id":"zhangsan","task_id":"task_011","task_order":11,"query":"基于前面的总结与比较，给张三项目提出两条优化建议。","support_memory_task_ids":["task_005","task_009"]}
+{"experiment_id":"exp_train_001","group_id":"mike","task_id":"task_012","task_order":12,"query":"Based on the previous summaries and comparison, give two optimization suggestions for Mike's project.","support_memory_task_ids":["task_007","task_010"]}

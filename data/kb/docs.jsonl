@@ -1,3 +1,8 @@
-{"doc_id":"doc_001","chunk_id":"chunk_001","content":"张三项目的核心目标是构建一个支持长期记忆与知识检索增强的智能体系统。"}
-{"doc_id":"doc_001","chunk_id":"chunk_002","content":"该项目重点包括：知识库构建、长期记忆管理、工具调用、任务轨迹记录与持续学习机制设计。"}
-{"doc_id":"doc_002","chunk_id":"chunk_001","content":"持续学习的目标是在新任务到来后保持旧任务能力，同时不断提升新任务表现。"}
+{"doc_id":"doc_zhangsan_001","chunk_id":"chunk_001","content":"张三项目的核心目标是构建一个支持长期记忆与知识检索增强的智能体系统，重点包括知识库构建、长期记忆管理、工具调用、任务轨迹记录与持续学习机制。"}
+{"doc_id":"doc_zhangsan_001","chunk_id":"chunk_002","content":"张三项目强调在新任务到来后保持旧任务能力，同时通过长期记忆复用与知识检索增强不断提升新任务表现。"}
+{"doc_id":"doc_lisi_001","chunk_id":"chunk_001","content":"李四项目的核心目标是构建一个强调多工具协同与任务规划能力的智能体系统，重点包括任务分解、工具编排、日志分析与持续优化。"}
+{"doc_id":"doc_lisi_001","chunk_id":"chunk_002","content":"李四项目更关注复杂任务执行过程中的规划控制与外部工具调度，通过任务轨迹分析提升系统稳定性与执行效率。"}
+{"doc_id":"doc_mike_001","chunk_id":"chunk_001","content":"Mike's project aims to build an agent system with multilingual knowledge retrieval and adaptive long-term memory. Its key modules include cross-lingual retrieval, memory fusion, continual adaptation, and tool-assisted reasoning."}
+{"doc_id":"doc_mike_001","chunk_id":"chunk_002","content":"Mike's project focuses on making the agent adapt to new tasks while preserving useful past experience through memory retrieval and multilingual knowledge support."}
+{"doc_id":"doc_jack_001","chunk_id":"chunk_001","content":"Jack's project aims to build a lightweight agent system with cost-aware execution and efficient memory usage. Its key modules include memory pruning, efficient retrieval, low-cost deployment, and task monitoring."}
+{"doc_id":"doc_jack_001","chunk_id":"chunk_002","content":"Jack's project emphasizes balancing system capability and computational cost by using lightweight memory management, efficient retrieval, and execution monitoring."}

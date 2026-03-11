@@ -1,7 +1,7 @@
 import json
 import random
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -24,69 +24,203 @@ def save_jsonl(path: Path, records: List[Dict[str, Any]]) -> None:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def normalize_memory_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    兼容旧格式 memory：
+    - 优先使用 memory_summary
+    - 若不存在则回退到 content / answer
+    """
+    if "memory_summary" not in record:
+        record["memory_summary"] = record.get("content") or record.get("answer") or ""
+
+    if "answer_raw" not in record:
+        record["answer_raw"] = record.get("answer", record.get("content", ""))
+
+    if "strategy_note" not in record:
+        record["strategy_note"] = record.get(
+            "experience",
+            "可作为后续相似任务的参考经验。",
+        )
+
+    if "content" not in record:
+        record["content"] = record.get("memory_summary", "")
+
+    return record
+
+
+def build_memory_index(memory_records: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """
+    以 task_id 建索引，默认同一 task_id 对应一条 memory。
+    """
+    index = {}
+    for record in memory_records:
+        record = normalize_memory_record(record)
+        task_id = record.get("task_id")
+        if task_id:
+            index[task_id] = record
+    return index
+
+
+def is_legal_history_memory(
+    memory_record: Dict[str, Any],
+    query_task: Dict[str, Any],
+) -> bool:
+    """
+    contrastive 构造也必须遵守合法历史原则：
+    - 同实验
+    - memory.task_order < query.task_order
+    """
+    if memory_record.get("experiment_id") != query_task.get("experiment_id"):
+        return False
+
+    mem_order = memory_record.get("task_order")
+    query_order = query_task.get("task_order")
+
+    if mem_order is None or query_order is None:
+        return False
+
+    return mem_order < query_order
+
+
+def select_negative_candidate(
+    legal_candidates: List[Dict[str, Any]],
+    positive_task_ids: set,
+    seed_rng: random.Random,
+) -> Optional[Dict[str, Any]]:
+    """
+    先从合法历史中选非正样本 negative。
+    这里先做一个最小可行版本：随机负样本。
+    后续可扩展为 hard negative。
+    """
+    negatives = [
+        r for r in legal_candidates
+        if r.get("task_id") not in positive_task_ids
+        and r.get("memory_summary", "").strip()
+    ]
+
+    if not negatives:
+        return None
+
+    return seed_rng.choice(negatives)
+
+
 def build_memory_contrastive_samples(
     memory_records: List[Dict[str, Any]],
+    task_labels: List[Dict[str, Any]],
     seed: int = 42,
 ) -> List[Dict[str, Any]]:
     """
-    基于 memory_bank.jsonl 构造最基础的对比学习样本。
+    基于结构化 memory + 任务标注文件构造 contrastive 样本。
 
-    思路：
-    - 每条 memory 记录都可作为某个 query 的 positive_memory
-    - negative_memory 从其他 task 的 memory 中随机采样
-    - 只构造“跨 task”负样本，避免把同一 task 的历史经验误当负样本
+    正样本：
+    - 来自 task_labels 里 support_memory_task_ids 指定的历史 task
+
+    负样本：
+    - 来自同实验、当前任务之前、但不属于正样本的合法历史 memory
+
+    训练文本：
+    - 统一使用 memory_summary
     """
-    random.seed(seed)
-
+    seed_rng = random.Random(seed)
     samples = []
 
-    if len(memory_records) < 2:
+    if not memory_records or not task_labels:
         return samples
 
-    for record in memory_records:
-        task_id = record.get("task_id")
-        query = record.get("query")
-        positive_memory = record.get("content")
+    memory_records = [normalize_memory_record(r) for r in memory_records]
+    memory_index = build_memory_index(memory_records)
 
-        if not task_id or not query or not positive_memory:
+    for task in task_labels:
+        query = task.get("query", "").strip()
+        task_id = task.get("task_id")
+        support_ids = task.get("support_memory_task_ids", [])
+
+        if not query or not task_id:
             continue
 
-        candidate_negatives = [
+        # 当前任务开始前、同实验内的合法历史候选
+        legal_candidates = [
             r for r in memory_records
-            if r.get("task_id") != task_id and r.get("content")
+            if is_legal_history_memory(r, task)
         ]
 
-        if not candidate_negatives:
+        if not legal_candidates:
             continue
 
-        negative_record = random.choice(candidate_negatives)
-        negative_memory = negative_record["content"]
+        positive_task_ids = set(support_ids)
 
-        sample = {
-            "task_id": task_id,
-            "query": query,
-            "positive_memory": positive_memory,
-            "negative_memory": negative_memory,
-            "source": "memory_bank",
-            "negative_type": "random",
-        }
-        samples.append(sample)
+        # 对当前任务的每个 positive 都构造一个三元组
+        for pos_task_id in support_ids:
+            pos_record = memory_index.get(pos_task_id)
+            if not pos_record:
+                continue
+
+            if not is_legal_history_memory(pos_record, task):
+                # 防止标注写错，把未来 memory 或跨实验 memory 当成正样本
+                continue
+
+            positive_memory_summary = pos_record.get("memory_summary", "").strip()
+            if not positive_memory_summary:
+                continue
+
+            neg_record = select_negative_candidate(
+                legal_candidates=legal_candidates,
+                positive_task_ids=positive_task_ids,
+                seed_rng=seed_rng,
+            )
+            if not neg_record:
+                continue
+
+            negative_memory_summary = neg_record.get("memory_summary", "").strip()
+            if not negative_memory_summary:
+                continue
+
+            sample = {
+                "experiment_id": task.get("experiment_id"),
+                "query_task_id": task_id,
+                "query_task_order": task.get("task_order"),
+                "query": query,
+                "positive_task_id": pos_task_id,
+                "positive_memory_summary": positive_memory_summary,
+                "negative_task_id": neg_record.get("task_id"),
+                "negative_memory_summary": negative_memory_summary,
+                "source": "structured_memory",
+                "positive_source": "task_label_support_memory",
+                "negative_type": "random_legal_history",
+                "candidate_pool_size": len(legal_candidates),
+            }
+            samples.append(sample)
 
     return samples
 
 
-def build_meta(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_meta(
+    samples: List[Dict[str, Any]],
+    memory_count: int,
+    task_label_count: int,
+) -> Dict[str, Any]:
     return {
         "num_samples": len(samples),
+        "num_memory_records": memory_count,
+        "num_task_labels": task_label_count,
         "fields": [
-            "task_id",
+            "experiment_id",
+            "query_task_id",
+            "query_task_order",
             "query",
-            "positive_memory",
-            "negative_memory",
+            "positive_task_id",
+            "positive_memory_summary",
+            "negative_task_id",
+            "negative_memory_summary",
             "source",
+            "positive_source",
             "negative_type",
+            "candidate_pool_size",
         ],
-        "description": "Memory contrastive dataset for continual learning reranking.",
+        "description": (
+            "Contrastive dataset built from structured memory_summary "
+            "under legal-history constraints."
+        ),
     }
 
 
@@ -94,20 +228,33 @@ def main():
     project_root = Path(__file__).resolve().parents[2]
 
     memory_path = project_root / "data" / "memory" / "memory_bank.jsonl"
+    task_label_path = project_root / "data" / "tasks" / "contrastive_task_labels.jsonl"
+
     output_path = project_root / "data" / "contrastive" / "memory_contrastive_samples.jsonl"
     meta_path = project_root / "data" / "contrastive" / "memory_contrastive_meta.json"
 
     memory_records = load_jsonl(memory_path)
-    samples = build_memory_contrastive_samples(memory_records)
+    task_labels = load_jsonl(task_label_path)
+
+    samples = build_memory_contrastive_samples(
+        memory_records=memory_records,
+        task_labels=task_labels,
+        seed=42,
+    )
 
     save_jsonl(output_path, samples)
 
-    meta = build_meta(samples)
+    meta = build_meta(
+        samples=samples,
+        memory_count=len(memory_records),
+        task_label_count=len(task_labels),
+    )
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
     print(f"已读取 memory 条数: {len(memory_records)}")
+    print(f"已读取任务标注条数: {len(task_labels)}")
     print(f"已构造 contrastive 样本数: {len(samples)}")
     print(f"样本保存路径: {output_path}")
     print(f"元信息保存路径: {meta_path}")
