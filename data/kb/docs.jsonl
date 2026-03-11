@@ -1,8 +1,29 @@
-{"doc_id":"doc_zhangsan_001","chunk_id":"chunk_001","content":"张三项目的核心目标是构建一个支持长期记忆与知识检索增强的智能体系统，重点包括知识库构建、长期记忆管理、工具调用、任务轨迹记录与持续学习机制。"}
-{"doc_id":"doc_zhangsan_001","chunk_id":"chunk_002","content":"张三项目强调在新任务到来后保持旧任务能力，同时通过长期记忆复用与知识检索增强不断提升新任务表现。"}
-{"doc_id":"doc_lisi_001","chunk_id":"chunk_001","content":"李四项目的核心目标是构建一个强调多工具协同与任务规划能力的智能体系统，重点包括任务分解、工具编排、日志分析与持续优化。"}
-{"doc_id":"doc_lisi_001","chunk_id":"chunk_002","content":"李四项目更关注复杂任务执行过程中的规划控制与外部工具调度，通过任务轨迹分析提升系统稳定性与执行效率。"}
-{"doc_id":"doc_mike_001","chunk_id":"chunk_001","content":"Mike's project aims to build an agent system with multilingual knowledge retrieval and adaptive long-term memory. Its key modules include cross-lingual retrieval, memory fusion, continual adaptation, and tool-assisted reasoning."}
-{"doc_id":"doc_mike_001","chunk_id":"chunk_002","content":"Mike's project focuses on making the agent adapt to new tasks while preserving useful past experience through memory retrieval and multilingual knowledge support."}
-{"doc_id":"doc_jack_001","chunk_id":"chunk_001","content":"Jack's project aims to build a lightweight agent system with cost-aware execution and efficient memory usage. Its key modules include memory pruning, efficient retrieval, low-cost deployment, and task monitoring."}
-{"doc_id":"doc_jack_001","chunk_id":"chunk_002","content":"Jack's project emphasizes balancing system capability and computational cost by using lightweight memory management, efficient retrieval, and execution monitoring."}
+{"experiment_id":"exp_train_002","group_id":"zhangsan","task_id":"task_001","task_order":1,"task_type":"seed_summary","entity":"zhangsan","query":"请总结张三项目的核心目标。","support_memory_task_ids":[]}
+{"experiment_id":"exp_train_002","group_id":"lisi","task_id":"task_002","task_order":2,"task_type":"seed_summary","entity":"lisi","query":"请总结李四项目的核心目标。","support_memory_task_ids":[]}
+{"experiment_id":"exp_train_002","group_id":"mike","task_id":"task_003","task_order":3,"task_type":"seed_summary","entity":"mike","query":"Please summarize the core goals of Mike's project.","support_memory_task_ids":[]}
+{"experiment_id":"exp_train_002","group_id":"jack","task_id":"task_004","task_order":4,"task_type":"seed_summary","entity":"jack","query":"Please summarize the core goals of Jack's project.","support_memory_task_ids":[]}
+
+{"experiment_id":"exp_train_002","group_id":"zhangsan","task_id":"task_005","task_order":5,"task_type":"refine_summary","entity":"zhangsan","query":"继续概括一下张三项目的主要目标与重点。","support_memory_task_ids":["task_001"]}
+{"experiment_id":"exp_train_002","group_id":"lisi","task_id":"task_006","task_order":6,"task_type":"refine_summary","entity":"lisi","query":"继续概括一下李四项目的主要目标与重点。","support_memory_task_ids":["task_002"]}
+{"experiment_id":"exp_train_002","group_id":"mike","task_id":"task_007","task_order":7,"task_type":"refine_summary","entity":"mike","query":"Further summarize Mike's project goals and key modules.","support_memory_task_ids":["task_003"]}
+{"experiment_id":"exp_train_002","group_id":"jack","task_id":"task_008","task_order":8,"task_type":"refine_summary","entity":"jack","query":"Further summarize Jack's project goals and key highlights.","support_memory_task_ids":["task_004"]}
+
+{"experiment_id":"exp_train_002","group_id":"zhangsan","task_id":"task_009","task_order":9,"task_type":"memory_strategy","entity":"zhangsan","query":"请说明张三项目在长期记忆与知识检索协同方面的设计思路。","support_memory_task_ids":["task_001","task_005"]}
+{"experiment_id":"exp_train_002","group_id":"lisi","task_id":"task_010","task_order":10,"task_type":"memory_strategy","entity":"lisi","query":"请说明李四项目在任务规划与工具协同方面的设计思路。","support_memory_task_ids":["task_002","task_006"]}
+{"experiment_id":"exp_train_002","group_id":"mike","task_id":"task_011","task_order":11,"task_type":"memory_strategy","entity":"mike","query":"Explain Mike's design strategy for multilingual retrieval and adaptive long-term memory.","support_memory_task_ids":["task_003","task_007"]}
+{"experiment_id":"exp_train_002","group_id":"jack","task_id":"task_012","task_order":12,"task_type":"memory_strategy","entity":"jack","query":"Explain Jack's design strategy for lightweight memory management and cost-aware execution.","support_memory_task_ids":["task_004","task_008"]}
+
+{"experiment_id":"exp_train_002","group_id":"compare_cn","task_id":"task_013","task_order":13,"task_type":"comparison","entity":"zhangsan_lisi","query":"请比较张三项目与李四项目在持续学习设计上的侧重点。","support_memory_task_ids":["task_009","task_010"]}
+{"experiment_id":"exp_train_002","group_id":"compare_en","task_id":"task_014","task_order":14,"task_type":"comparison","entity":"mike_jack","query":"Compare Mike's project and Jack's project in terms of memory strategy and system focus.","support_memory_task_ids":["task_011","task_012"]}
+{"experiment_id":"exp_train_002","group_id":"compare_cross_1","task_id":"task_015","task_order":15,"task_type":"comparison","entity":"zhangsan_mike","query":"请比较张三项目与 Mike 项目在记忆复用与知识检索增强方面的异同。","support_memory_task_ids":["task_009","task_011"]}
+{"experiment_id":"exp_train_002","group_id":"compare_cross_2","task_id":"task_016","task_order":16,"task_type":"comparison","entity":"lisi_jack","query":"Compare Li Si's project and Jack's project in terms of planning efficiency and cost-aware system design.","support_memory_task_ids":["task_010","task_012"]}
+
+{"experiment_id":"exp_train_002","group_id":"zhangsan","task_id":"task_017","task_order":17,"task_type":"suggestion","entity":"zhangsan","query":"基于前面的总结与比较，给张三项目提出两条优化建议。","support_memory_task_ids":["task_005","task_009","task_013","task_015"]}
+{"experiment_id":"exp_train_002","group_id":"lisi","task_id":"task_018","task_order":18,"task_type":"suggestion","entity":"lisi","query":"基于前面的总结与比较，给李四项目提出两条优化建议。","support_memory_task_ids":["task_006","task_010","task_013","task_016"]}
+{"experiment_id":"exp_train_002","group_id":"mike","task_id":"task_019","task_order":19,"task_type":"suggestion","entity":"mike","query":"Based on the previous summaries and comparisons, give two optimization suggestions for Mike's project.","support_memory_task_ids":["task_007","task_011","task_014","task_015"]}
+{"experiment_id":"exp_train_002","group_id":"jack","task_id":"task_020","task_order":20,"task_type":"suggestion","entity":"jack","query":"Based on the previous summaries and comparisons, give two optimization suggestions for Jack's project.","support_memory_task_ids":["task_008","task_012","task_014","task_016"]}
+
+{"experiment_id":"exp_train_002","group_id":"zhangsan","task_id":"task_021","task_order":21,"task_type":"risk_analysis","entity":"zhangsan","query":"请分析张三项目在长期记忆扩张与知识一致性方面的潜在风险。","support_memory_task_ids":["task_009","task_017"]}
+{"experiment_id":"exp_train_002","group_id":"lisi","task_id":"task_022","task_order":22,"task_type":"risk_analysis","entity":"lisi","query":"请分析李四项目在多工具协同和规划控制方面的潜在风险。","support_memory_task_ids":["task_010","task_018"]}
+{"experiment_id":"exp_train_002","group_id":"mike","task_id":"task_023","task_order":23,"task_type":"scenario_analysis","entity":"mike","query":"Discuss a suitable application scenario for Mike's project and explain why its memory strategy fits that scenario.","support_memory_task_ids":["task_011","task_019"]}
+{"experiment_id":"exp_train_002","group_id":"jack","task_id":"task_024","task_order":24,"task_type":"scenario_analysis","entity":"jack","query":"Discuss a suitable deployment scenario for Jack's project and explain why its lightweight memory strategy is appropriate.","support_memory_task_ids":["task_012","task_020"]}

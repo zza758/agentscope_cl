@@ -3,6 +3,62 @@ import random
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+import math
+import sys
+
+from src.memory.embedder import DashScopeEmbedder
+from src.utils.config_loader import load_config, PROJECT_ROOT
+
+
+def normalize_summary_text(text: str) -> str:
+    if not text:
+        return ""
+    return " ".join(text.strip().split()).lower()
+
+
+def deduplicate_memory_candidates(
+        candidates: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    按 memory_summary 文本去重。
+    保留规则：
+    1. task_order 更小者优先（更早历史）
+    """
+    dedup_map = {}
+
+    for item in candidates:
+        summary = item.get("memory_summary", "").strip()
+        norm_summary = normalize_summary_text(summary)
+        if not norm_summary:
+            continue
+
+        if norm_summary not in dedup_map:
+            dedup_map[norm_summary] = item
+            continue
+
+        old_item = dedup_map[norm_summary]
+        old_order = old_item.get("task_order", 10 ** 9)
+        new_order = item.get("task_order", 10 ** 9)
+
+        if new_order < old_order:
+            dedup_map[norm_summary] = item
+
+    return list(dedup_map.values())
+
+
+def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+    if not vec1 or not vec2 or len(vec1) != len(vec2):
+        return 0.0
+
+    dot = sum(a * b for a, b in zip(vec1, vec2))
+    norm1 = math.sqrt(sum(a * a for a in vec1))
+    norm2 = math.sqrt(sum(b * b for b in vec2))
+
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+
+    return dot / (norm1 * norm2)
+
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     records = []
@@ -62,8 +118,8 @@ def build_memory_index(memory_records: List[Dict[str, Any]]) -> Dict[str, Dict[s
 
 
 def is_legal_history_memory(
-    memory_record: Dict[str, Any],
-    query_task: Dict[str, Any],
+        memory_record: Dict[str, Any],
+        query_task: Dict[str, Any],
 ) -> bool:
     """
     contrastive 构造也必须遵守合法历史原则：
@@ -82,32 +138,56 @@ def is_legal_history_memory(
     return mem_order < query_order
 
 
-def select_negative_candidate(
+def select_hard_negative_candidate(
+    query: str,
     legal_candidates: List[Dict[str, Any]],
     positive_task_ids: set,
-    seed_rng: random.Random,
+    positive_summaries: set,
+    embedder,
 ) -> Optional[Dict[str, Any]]:
     """
-    先从合法历史中选非正样本 negative。
-    这里先做一个最小可行版本：随机负样本。
-    后续可扩展为 hard negative。
+    从合法历史候选中挑选 hard negative：
+    - 非正样本
+    - 与 query 的相似度高
     """
-    negatives = [
-        r for r in legal_candidates
-        if r.get("task_id") not in positive_task_ids
-        and r.get("memory_summary", "").strip()
-    ]
+    negatives = []
+    for r in legal_candidates:
+        task_id = r.get("task_id")
+        summary = r.get("memory_summary", "").strip()
+        norm_summary = normalize_summary_text(summary)
+
+        if not summary:
+            continue
+        if task_id in positive_task_ids:
+            continue
+        if norm_summary in positive_summaries:
+            continue
+
+        negatives.append(r)
 
     if not negatives:
         return None
 
-    return seed_rng.choice(negatives)
+    query_vec = embedder.embed_query(query)
+
+    scored_negatives = []
+    for item in negatives:
+        memory_text = item.get("memory_summary", "").strip()
+        memory_vec = embedder.embed_query(memory_text)
+        score = cosine_similarity(query_vec, memory_vec)
+
+        scored_negatives.append((score, item))
+
+    scored_negatives.sort(key=lambda x: x[0], reverse=True)
+
+    return scored_negatives[0][1] if scored_negatives else None
 
 
 def build_memory_contrastive_samples(
-    memory_records: List[Dict[str, Any]],
-    task_labels: List[Dict[str, Any]],
-    seed: int = 42,
+        memory_records: List[Dict[str, Any]],
+        task_labels: List[Dict[str, Any]],
+        embedder,
+        seed: int = 42,
 ) -> List[Dict[str, Any]]:
     """
     基于结构化 memory + 任务标注文件构造 contrastive 样本。
@@ -138,11 +218,23 @@ def build_memory_contrastive_samples(
         if not query or not task_id:
             continue
 
+        positive_task_ids = set(support_ids)
+
+        positive_summaries = set()
+        for pos_task_id in support_ids:
+            pos_record_tmp = memory_index.get(pos_task_id)
+            if not pos_record_tmp:
+                continue
+            pos_summary_tmp = pos_record_tmp.get("memory_summary", "").strip()
+            if pos_summary_tmp:
+                positive_summaries.add(normalize_summary_text(pos_summary_tmp))
+
         # 当前任务开始前、同实验内的合法历史候选
         legal_candidates = [
             r for r in memory_records
             if is_legal_history_memory(r, task)
         ]
+        legal_candidates = deduplicate_memory_candidates(legal_candidates)
 
         if not legal_candidates:
             continue
@@ -163,11 +255,14 @@ def build_memory_contrastive_samples(
             if not positive_memory_summary:
                 continue
 
-            neg_record = select_negative_candidate(
+            neg_record = select_hard_negative_candidate(
+                query=query,
                 legal_candidates=legal_candidates,
                 positive_task_ids=positive_task_ids,
-                seed_rng=seed_rng,
+                positive_summaries=positive_summaries,
+                embedder=embedder,
             )
+
             if not neg_record:
                 continue
 
@@ -186,7 +281,7 @@ def build_memory_contrastive_samples(
                 "negative_memory_summary": negative_memory_summary,
                 "source": "structured_memory",
                 "positive_source": "task_label_support_memory",
-                "negative_type": "random_legal_history",
+                "negative_type": "hard_legal_history",
                 "candidate_pool_size": len(legal_candidates),
             }
             samples.append(sample)
@@ -195,9 +290,9 @@ def build_memory_contrastive_samples(
 
 
 def build_meta(
-    samples: List[Dict[str, Any]],
-    memory_count: int,
-    task_label_count: int,
+        samples: List[Dict[str, Any]],
+        memory_count: int,
+        task_label_count: int,
 ) -> Dict[str, Any]:
     return {
         "num_samples": len(samples),
@@ -236,9 +331,20 @@ def main():
     memory_records = load_jsonl(memory_path)
     task_labels = load_jsonl(task_label_path)
 
+    config = load_config()
+    embedding_cfg = config.get("embedding", {})
+    model_cfg = config.get("model", {})
+
+    embedder = DashScopeEmbedder(
+        api_key=model_cfg["dashscope_api_key"],
+        model_name=embedding_cfg.get("model_name", "text-embedding-v4"),
+        normalize=embedding_cfg.get("normalize", True),
+    )
+
     samples = build_memory_contrastive_samples(
         memory_records=memory_records,
         task_labels=task_labels,
+        embedder=embedder,
         seed=42,
     )
 
