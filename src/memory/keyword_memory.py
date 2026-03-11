@@ -164,7 +164,12 @@ class KeywordMemoryManager(BaseMemoryManager):
                 )
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored[:top_k]
+
+        deduped = self._deduplicate_scored_items(scored)
+        deduped.sort(key=lambda x: x["score"], reverse=True)
+
+        return deduped[:top_k]
+
 
     def write_memory(self, record: MemoryRecord) -> None:
         key = self._build_key(record.experiment_id, record.task_id, record.query)
@@ -177,3 +182,39 @@ class KeywordMemoryManager(BaseMemoryManager):
         self._memory_bank.append(payload)
         self._memory_keys.add(key)
         self._append_memory_to_file(payload)
+
+    @staticmethod
+    def _normalize_dedup_text(text: str) -> str:
+        if not text:
+            return ""
+        normalized = " ".join(text.strip().split())
+        return normalized.lower()
+
+    @staticmethod
+    def _deduplicate_scored_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        dedup_map: Dict[str, Dict[str, Any]] = {}
+
+        for item in items:
+            text = item.get("memory_summary") or item.get("content", "")
+            norm_text = KeywordMemoryManager._normalize_dedup_text(text)
+            if not norm_text:
+                continue
+
+            if norm_text not in dedup_map:
+                dedup_map[norm_text] = item
+                continue
+
+            old_item = dedup_map[norm_text]
+
+            old_score = float(old_item.get("score", 0.0))
+            new_score = float(item.get("score", 0.0))
+
+            old_order = old_item.get("task_order", 10**9)
+            new_order = item.get("task_order", 10**9)
+
+            if (new_score > old_score) or (new_score == old_score and new_order < old_order):
+                dedup_map[norm_text] = item
+
+        return list(dedup_map.values())
+
+

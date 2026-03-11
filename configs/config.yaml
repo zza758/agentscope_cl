@@ -59,7 +59,7 @@ contrastive:
   output_dir: "outputs/contrastive"
   model_dir: "outputs/contrastive/contrastive_encoder"
 
-  model_name_or_path: "bert-base-chinese"
+  model_name_or_path: "/root/hf_models/bert-base-chinese"
   max_length: 128
   batch_size: 8
   num_epochs: 3
