@@ -4,10 +4,9 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import math
-import sys
 
 from src.memory.embedder import DashScopeEmbedder
-from src.utils.config_loader import load_config, PROJECT_ROOT
+from src.utils.config_loader import load_config
 
 
 def normalize_summary_text(text: str) -> str:
