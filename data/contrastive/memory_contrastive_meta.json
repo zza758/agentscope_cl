@@ -1,12 +1,20 @@
 {
-  "num_samples": 2,
+  "num_samples": 44,
+  "num_memory_records": 24,
+  "num_task_labels": 24,
   "fields": [
-    "task_id",
+    "experiment_id",
+    "query_task_id",
+    "query_task_order",
     "query",
-    "positive_memory",
-    "negative_memory",
+    "positive_task_id",
+    "positive_memory_summary",
+    "negative_task_id",
+    "negative_memory_summary",
     "source",
-    "negative_type"
+    "positive_source",
+    "negative_type",
+    "candidate_pool_size"
   ],
-  "description": "Memory contrastive dataset for continual learning reranking."
+  "description": "Contrastive dataset built from structured memory_summary under legal-history constraints."
 }

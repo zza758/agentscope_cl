@@ -1,0 +1,20 @@
+{
+  "num_samples": 12,
+  "num_memory_records": 24,
+  "num_task_labels": 12,
+  "fields": [
+    "experiment_id",
+    "query_task_id",
+    "query_task_order",
+    "query",
+    "positive_task_id",
+    "positive_memory_summary",
+    "negative_task_id",
+    "negative_memory_summary",
+    "source",
+    "positive_source",
+    "negative_type",
+    "candidate_pool_size"
+  ],
+  "description": "Contrastive dataset built from structured memory_summary under legal-history constraints."
+}
