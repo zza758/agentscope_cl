@@ -68,3 +68,6 @@ contrastive:
 
   candidate_top_k: 5
   final_top_k: 3
+
+eval:
+  output_dir: "outputs/eval"
