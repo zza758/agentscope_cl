@@ -25,10 +25,17 @@ def build_memory_policy(config: dict):
     policy_cfg = config.get("memory_policy", {})
 
     if ablation_cfg.get("use_rl_policy", False):
+        rl_cfg = config.get("rl_policy", {})
         return RLMemoryPolicy(
-            max_select_k=policy_cfg.get("max_select_k", memory_cfg.get("top_k", 3)),
-            min_summary_len=policy_cfg.get("min_summary_len", 10),
-            score_threshold=policy_cfg.get("score_threshold", 0.0),
+            max_select_k=rl_cfg.get("max_select_k", memory_cfg.get("top_k", 3)),
+            min_summary_len=rl_cfg.get("min_summary_len", 10),
+            alpha=rl_cfg.get("alpha", 0.5),
+            model_path=rl_cfg.get("model_path", "outputs/rl_policy/linucb_state.json"),
+            log_path=rl_cfg.get("log_path", "outputs/rl_policy/decision_log.jsonl"),
+            online_update=rl_cfg.get("online_update", False),
+            write_reward=rl_cfg.get("write_reward", 0.2),
+            hit_reward=rl_cfg.get("hit_reward", 1.0),
+            miss_penalty=rl_cfg.get("miss_penalty", -0.2),
         )
 
     if ablation_cfg.get("use_memory_policy", False):

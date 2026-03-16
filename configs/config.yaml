@@ -38,17 +38,32 @@ embedding:
   normalize: true
 
 ablation:
-  use_knowledge_base: true      # 是否允许调用知识库工具。
-  use_memory: true              # 是否读取历史经验
-  use_memory_write: true        # 任务结束后是否写入新经验。
-  use_memory_persistence: true  # 是否从磁盘加载/保存 memory
+  use_knowledge_base: true
+  use_memory: true
+  use_memory_write: true
+  use_memory_persistence: true
   use_retrieval_logging: true
   use_memory_logging: true
-  use_vector_memory: true       # memory 检索走关键词还是向量
-  use_contrastive_rerank: true  # 加对比学习重排器
-  use_rl_policy: false          # 加强化学习策略控制
-  expose_reasoning: true        # 最终答案里是否保留中间推理说明
+  use_vector_memory: true
+  use_contrastive_rerank: true
+  use_rl_policy: false
+  expose_reasoning: true
   use_memory_policy: false
+
+memory_policy:
+  max_select_k: 3
+  min_summary_len: 10
+
+rl_policy:
+  alpha: 0.5
+  max_select_k: 3
+  min_summary_len: 10
+  model_path: "outputs/rl_policy/linucb_state.json"
+  log_path: "outputs/rl_policy/decision_log.jsonl"
+  online_update: false
+  write_reward: 0.2
+  hit_reward: 1.0
+  miss_penalty: -0.2
 
 contrastive:
   enabled: true
@@ -72,8 +87,3 @@ contrastive:
 
 eval:
   output_dir: "outputs/eval"
-
-memory_policy:
-  max_select_k: 3
-  min_summary_len: 10
-  score_threshold: 0.0

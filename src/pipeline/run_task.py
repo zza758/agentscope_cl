@@ -276,6 +276,10 @@ class TaskRunner:
                 final_answer=final_answer,
                 memory_summary=memory_summary,
                 strategy_note=strategy_note,
+                memory_written=should_write,
+                latency_ms=latency_ms,
+                task_id=task_id,
+                task_order=task_order,
             )
 
         return {
@@ -288,4 +292,6 @@ class TaskRunner:
             "latency_ms": latency_ms,
             "used_memories": memory_items,
             "memory_written": should_write,
+            "policy_name": self.memory_policy.__class__.__name__ if self.memory_policy else None,
+            "policy_selected_memory_ids": [x.get("task_id") for x in memory_items],
         }
