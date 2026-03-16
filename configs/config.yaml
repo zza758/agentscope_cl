@@ -47,8 +47,8 @@ ablation:
   use_vector_memory: true
   use_contrastive_rerank: true
   use_rl_policy: false
-  expose_reasoning: true
   use_memory_policy: false
+  expose_reasoning: true
 
 memory_policy:
   max_select_k: 3

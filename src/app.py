@@ -15,6 +15,7 @@ from src.utils.config_loader import load_config, PROJECT_ROOT
 from src.reranker.contrastive_reranker import ContrastiveReranker
 from src.training.contrastive_infer import ContrastiveEncoderInfer
 from src.policy.rule_policy import RuleBasedMemoryPolicy
+from src.policy.rl_policy import RLMemoryPolicy
 
 
 def load_tasks(tasks_file: str):
@@ -31,15 +32,29 @@ def load_tasks(tasks_file: str):
 def build_memory_policy(config: dict):
     ablation_cfg = config["ablation"]
     memory_cfg = config["memory"]
-    policy_cfg = config.get("memory_policy", {})
 
-    if not ablation_cfg.get("use_memory_policy", False):
-        return None
+    if ablation_cfg.get("use_rl_policy", False):
+        rl_cfg = config.get("rl_policy", {})
+        return RLMemoryPolicy(
+            max_select_k=rl_cfg.get("max_select_k", memory_cfg.get("top_k", 3)),
+            min_summary_len=rl_cfg.get("min_summary_len", 10),
+            alpha=rl_cfg.get("alpha", 0.5),
+            model_path=rl_cfg.get("model_path", "outputs/rl_policy/linucb_state.json"),
+            log_path=rl_cfg.get("log_path", "outputs/rl_policy/decision_log.jsonl"),
+            online_update=rl_cfg.get("online_update", False),
+            write_reward=rl_cfg.get("write_reward", 0.2),
+            hit_reward=rl_cfg.get("hit_reward", 1.0),
+            miss_penalty=rl_cfg.get("miss_penalty", -0.2),
+        )
 
-    return RuleBasedMemoryPolicy(
-        max_select_k=policy_cfg.get("max_select_k", memory_cfg.get("top_k", 3)),
-        min_summary_len=policy_cfg.get("min_summary_len", 10),
-    )
+    if ablation_cfg.get("use_memory_policy", False):
+        policy_cfg = config.get("memory_policy", {})
+        return RuleBasedMemoryPolicy(
+            max_select_k=policy_cfg.get("max_select_k", memory_cfg.get("top_k", 3)),
+            min_summary_len=policy_cfg.get("min_summary_len", 10),
+        )
+
+    return None
 
 
 async def main():
@@ -116,9 +131,9 @@ async def main():
     # 6. 初始化 contrastive reranker
     contrastive_reranker = None
     if (
-        contrastive_cfg.get("enabled", False)
-        and contrastive_cfg.get("rerank_enabled", False)
-        and ablation_cfg.get("use_contrastive_rerank", False)
+            contrastive_cfg.get("enabled", False)
+            and contrastive_cfg.get("rerank_enabled", False)
+            and ablation_cfg.get("use_contrastive_rerank", False)
     ):
         model_dir = Path(contrastive_cfg["model_dir"])
         if not model_dir.is_absolute():
