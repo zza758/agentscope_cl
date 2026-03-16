@@ -48,6 +48,7 @@ ablation:
   use_contrastive_rerank: true  # 加对比学习重排器
   use_rl_policy: false          # 加强化学习策略控制
   expose_reasoning: true        # 最终答案里是否保留中间推理说明
+  use_memory_policy: false
 
 contrastive:
   enabled: true
@@ -71,3 +72,7 @@ contrastive:
 
 eval:
   output_dir: "outputs/eval"
+
+memory_policy:
+  max_select_k: 3
+  min_summary_len: 10

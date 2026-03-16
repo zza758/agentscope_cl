@@ -1,9 +1,8 @@
 import time
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from agentscope.message import Msg
-import re
 
 from src.runtime.task_context import TaskContext
 from src.memory.memory_record import MemoryRecord
@@ -28,106 +27,19 @@ def extract_text_from_response(response) -> str:
     return str(response)
 
 
-def clean_final_answer(answer: str, expose_reasoning: bool = True) -> str:
-    """
-    根据配置决定是否保留中间推理痕迹。
-    """
-    if expose_reasoning:
-        return answer.strip()
-
-    lines = []
-    for line in answer.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            lines.append(line)
-            continue
-        if stripped.startswith("无需调用知识检索工具"):
-            continue
-        if stripped.startswith("需要调用知识检索工具"):
-            continue
-        if stripped.startswith("根据历史经验"):
-            continue
-        lines.append(line)
-
-    cleaned = "\n".join(lines).strip()
-    return cleaned if cleaned else answer.strip()
-
-
-def clean_answer_for_memory(answer: str) -> str:
-    """
-    为长期 memory 清洗答案：
-    只保留可复用的知识结论，去掉检索决策、历史经验说明、重排序说明等元话语。
-    """
-    if not answer:
-        return answer
-
-    drop_if_contains = [
-        "根据历史经验",
-        "当前任务是",
-        "当前任务“",
-        "当前任务\"",
-        "无需额外检索",
-        "无需重复检索",
-        "无需调用知识检索工具",
-        "无需再次调用知识检索工具",
-        "需要调用知识检索工具",
-        "必须依赖外部知识检索",
-        "可直接基于历史经验",
-        "直接基于历史经验进行",
-        "可直接基于已有知识",
-        "已有知识进行归纳",
-        "历史经验已覆盖",
-        "属于同一问题的深化表述",
-        "属于对同一主题的深化",
-        "无需新增事实性信息",
-        "rerank=",
-        "重排序得分",
-        "说明其可靠性较强",
-        "答案如下",
-    ]
-
-    cleaned_lines = []
-    for line in answer.splitlines():
-        stripped = line.strip()
-
-        if not stripped:
-            if cleaned_lines and cleaned_lines[-1] != "":
-                cleaned_lines.append("")
-            continue
-
-        # 只要这一行里含有这些过程性短语，就整行删掉
-        if any(token in stripped for token in drop_if_contains):
-            continue
-
-        cleaned_lines.append(line)
-
-    cleaned = "\n".join(cleaned_lines).strip()
-
-    # 去掉开头常见解释性前缀
-    cleaned = re.sub(r"^根据检索到的知识[，,:：]?\s*", "", cleaned)
-    cleaned = re.sub(r"^根据历史经验\d*[，,:：]?\s*", "", cleaned)
-    cleaned = re.sub(r"^因此[，,:：]?\s*", "", cleaned)
-    cleaned = re.sub(r"^可直接基于已有知识进行归纳[，,:：]?\s*", "", cleaned)
-    cleaned = re.sub(r"^可直接基于历史经验进行更[^：:\n]*[：:]\s*", "", cleaned)
-
-    # 压缩多余空行
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-
-    return cleaned if cleaned else answer.strip()
-
-
 class TaskRunner:
     def __init__(
-            self,
-            agent,
-            memory_manager,
-            mysql_logger,
-            knowledge_base,
-            ablation_cfg,
-            memory_top_k: int = 3,
-            contrastive_cfg: dict = None,
-            contrastive_reranker=None,
-            experiment_id: str = "default_exp",
+        self,
+        agent,
+        memory_manager,
+        mysql_logger,
+        knowledge_base,
+        ablation_cfg,
+        memory_top_k: int = 3,
+        contrastive_cfg: Optional[dict] = None,
+        contrastive_reranker=None,
+        experiment_id: str = "default_exp",
+        memory_policy=None,
     ):
         self.agent = agent
         self.memory_manager = memory_manager
@@ -138,6 +50,7 @@ class TaskRunner:
         self.contrastive_cfg = contrastive_cfg or {}
         self.contrastive_reranker = contrastive_reranker
         self.experiment_id = experiment_id
+        self.memory_policy = memory_policy
 
     def _retrieve_memories(self, query: str, task_context: TaskContext) -> List[Dict[str, Any]]:
         if not self.ablation_cfg.get("use_memory", True):
@@ -159,16 +72,23 @@ class TaskRunner:
         )
 
         if (
-                self.ablation_cfg.get("use_contrastive_rerank", False)
-                and self.contrastive_cfg.get("rerank_enabled", False)
-                and self.contrastive_reranker is not None
-                and memory_items
+            self.ablation_cfg.get("use_contrastive_rerank", False)
+            and self.contrastive_cfg.get("rerank_enabled", False)
+            and self.contrastive_reranker is not None
+            and memory_items
         ):
             final_top_k = int(self.contrastive_cfg.get("final_top_k", self.memory_top_k))
             memory_items = self.contrastive_reranker.rerank(
                 query=query,
                 candidates=memory_items,
                 top_k=final_top_k,
+            )
+
+        if self.memory_policy is not None:
+            memory_items = self.memory_policy.select_memories(
+                query=query,
+                task_context=task_context,
+                candidates=memory_items,
             )
 
         return memory_items
@@ -220,7 +140,7 @@ class TaskRunner:
             self.knowledge_base.set_runtime_context(None)
 
         memory_items = self._retrieve_memories(query=query, task_context=task_context)
-        memories = [item.get("content", "") for item in memory_items]
+        memory_texts = [item.get("content", "") for item in memory_items]
         formatted_memories = self._format_memory_items(memory_items)
 
         if self.ablation_cfg.get("use_memory_logging", True):
@@ -229,7 +149,7 @@ class TaskRunner:
                 memory_key=f"task:{task_id}:retrieve",
                 operation_type="retrieve",
                 memory_content=formatted_memories,
-                relevance_score=memory_items[0]["score"] if memory_items else None,
+                relevance_score=memory_items[0]["score"] if memory_items and memory_items[0].get("score") is not None else None,
             )
 
         user_prompt = (
@@ -237,14 +157,14 @@ class TaskRunner:
             f"可参考的历史经验:\n{formatted_memories}\n\n"
             f"请先判断是否需要调用知识检索工具，再完成任务。\n"
             f"最终输出请严格使用以下格式：\n\n"
-            f"【最终答案】\n"
+            f"〖最终答案〗\n"
             f"写给用户看的最终回答。\n\n"
-            f"【记忆摘要】\n"
+            f"〖记忆摘要〗\n"
             f"提炼出适合长期记忆检索的一段摘要。要求：\n"
             f"1. 只保留以后可复用的知识结论；\n"
             f"2. 不要写“无需检索”“根据历史经验”等过程性话语；\n"
             f"3. 尽量简洁、信息完整。\n\n"
-            f"【策略备注】\n"
+            f"〖策略备注〗\n"
             f"简要说明这次任务处理策略，可用于后续策略学习。\n"
         )
 
@@ -253,16 +173,15 @@ class TaskRunner:
             step_no=1,
             agent_name="MainAgent",
             action_type="compose_input",
-            action_input={"query": query, "memories": memories},
+            action_input={"query": query, "memories": memory_texts},
             action_output=user_prompt,
         )
 
         msg = Msg(name="user", content=user_prompt, role="user")
         response = await self.agent(msg)
-
         raw_answer = extract_text_from_response(response)
-        parsed = parse_structured_answer(raw_answer)
 
+        parsed = parse_structured_answer(raw_answer)
         final_answer = parsed["final_answer"].strip()
         memory_summary = parsed["memory_summary"].strip()
         strategy_note = parsed["strategy_note"].strip()
@@ -274,36 +193,69 @@ class TaskRunner:
         if not strategy_note:
             strategy_note = "可作为后续相似任务的参考经验。"
 
-        # memory_summary 来自结构化解析，不再走旧的 regex 清洗
-        memory_summary = memory_summary.strip()
+        write_payload = {
+            "answer_raw": final_answer,
+            "memory_summary": memory_summary,
+            "strategy_note": strategy_note,
+        }
 
-        memory_record = MemoryRecord(
-            experiment_id=self.experiment_id,
-            task_id=task_id,
-            task_order=task_order,
-            query=query,
-            answer_raw=final_answer,
-            memory_summary=memory_summary,
-            strategy_note=strategy_note,
-            created_at=MemoryRecord.now_ts(),
-        )
+        should_write = True
+        if self.memory_policy is not None:
+            should_write = self.memory_policy.should_write_memory(
+                query=query,
+                task_context=task_context,
+                final_answer=final_answer,
+                memory_summary=memory_summary,
+                strategy_note=strategy_note,
+            )
+            if should_write:
+                custom_payload = self.memory_policy.build_write_record(
+                    query=query,
+                    task_context=task_context,
+                    final_answer=final_answer,
+                    memory_summary=memory_summary,
+                    strategy_note=strategy_note,
+                )
+                if custom_payload:
+                    write_payload = custom_payload
 
-        self.mysql_logger.log_memory(
-            task_run_id=task_run_id,
-            memory_key=f"task:{task_id}:write",
-            operation_type="write",
-            memory_content=memory_record.to_log_text(),
-            relevance_score=None,
-        )
+        if should_write:
+            memory_record = MemoryRecord(
+                experiment_id=self.experiment_id,
+                task_id=task_id,
+                task_order=task_order,
+                query=query,
+                answer_raw=write_payload["answer_raw"],
+                memory_summary=write_payload["memory_summary"],
+                strategy_note=write_payload["strategy_note"],
+                created_at=MemoryRecord.now_ts(),
+            )
 
-        if (
+            self.mysql_logger.log_memory(
+                task_run_id=task_run_id,
+                memory_key=f"task:{task_id}:write",
+                operation_type="write",
+                memory_content=memory_record.to_log_text(),
+                relevance_score=None,
+            )
+
+            if (
                 self.ablation_cfg.get("use_memory", True)
                 and self.ablation_cfg.get("use_memory_write", True)
                 and self.memory_manager is not None
-        ):
-            self.memory_manager.write_memory(memory_record)
+            ):
+                self.memory_manager.write_memory(memory_record)
+        else:
+            self.mysql_logger.log_memory(
+                task_run_id=task_run_id,
+                memory_key=f"task:{task_id}:write_skip",
+                operation_type="write_skip",
+                memory_content=memory_summary,
+                relevance_score=None,
+            )
 
         latency_ms = int((time.time() - start_time) * 1000)
+
         self.mysql_logger.update_task_result(
             task_run_id=task_run_id,
             final_answer=final_answer,
@@ -316,6 +268,16 @@ class TaskRunner:
         if self.knowledge_base is not None:
             self.knowledge_base.set_runtime_context(None)
 
+        if self.memory_policy is not None:
+            self.memory_policy.on_task_end(
+                query=query,
+                task_context=task_context,
+                selected_memories=memory_items,
+                final_answer=final_answer,
+                memory_summary=memory_summary,
+                strategy_note=strategy_note,
+            )
+
         return {
             "task_run_id": task_run_id,
             "task_id": task_id,
@@ -324,5 +286,6 @@ class TaskRunner:
             "memory_summary": memory_summary,
             "strategy_note": strategy_note,
             "latency_ms": latency_ms,
-            "used_memories": memories,
+            "used_memories": memory_items,
+            "memory_written": should_write,
         }

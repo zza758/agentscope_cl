@@ -1,7 +1,9 @@
 import asyncio
 import argparse
+import json
 from pathlib import Path
 from datetime import datetime
+
 from src.agents.main_agent import build_main_agent
 from src.memory.embedder import DashScopeEmbedder
 from src.memory.keyword_memory import KeywordMemoryManager
@@ -12,10 +14,10 @@ from src.tools.retrieval_tool import SimpleKnowledgeBase
 from src.utils.config_loader import load_config, PROJECT_ROOT
 from src.reranker.contrastive_reranker import ContrastiveReranker
 from src.training.contrastive_infer import ContrastiveEncoderInfer
+from src.policy.rule_policy import RuleBasedMemoryPolicy
 
 
 def load_tasks(tasks_file: str):
-    import json
     tasks = []
     with open(tasks_file, "r", encoding="utf-8") as f:
         for line in f:
@@ -24,6 +26,20 @@ def load_tasks(tasks_file: str):
                 tasks.append(json.loads(line))
     tasks.sort(key=lambda x: x["task_order"])
     return tasks
+
+
+def build_memory_policy(config: dict):
+    ablation_cfg = config["ablation"]
+    memory_cfg = config["memory"]
+    policy_cfg = config.get("memory_policy", {})
+
+    if not ablation_cfg.get("use_memory_policy", False):
+        return None
+
+    return RuleBasedMemoryPolicy(
+        max_select_k=policy_cfg.get("max_select_k", memory_cfg.get("top_k", 3)),
+        min_summary_len=policy_cfg.get("min_summary_len", 10),
+    )
 
 
 async def main():
@@ -39,6 +55,7 @@ async def main():
     memory_cfg = config["memory"]
     kb_cfg = config["knowledge_base"]
     embedding_cfg = config.get("embedding", {})
+    contrastive_cfg = config.get("contrastive", {})
 
     # 路径解析
     kb_path = Path(kb_cfg["kb_path"])
@@ -63,19 +80,16 @@ async def main():
     kb.bind_logger(mysql_logger)
     kb.set_logging_enabled(ablation_cfg.get("use_retrieval_logging", True))
 
-    # 4. 初始化 memory manager（根据开关和后端选择）
+    # 4. 初始化 memory manager
     memory_manager = None
-
     if ablation_cfg.get("use_memory", True):
         backend = memory_cfg.get("backend", "keyword")
-
         if backend == "vector" and ablation_cfg.get("use_vector_memory", True):
             embedder = DashScopeEmbedder(
                 api_key=config["model"]["dashscope_api_key"],
                 model_name=embedding_cfg.get("model_name", "text-embedding-v4"),
                 normalize=embedding_cfg.get("normalize", True),
             )
-
             memory_manager = VectorMemoryManager(
                 storage_path=str(memory_path),
                 embedder=embedder,
@@ -93,17 +107,14 @@ async def main():
 
     # 5. 根据开关决定是否给 Agent 注册知识库工具
     retrieval_func = kb.retrieve_knowledge if ablation_cfg.get("use_knowledge_base", True) else None
-
     agent = build_main_agent(
         model_config=config["model"],
         retrieval_func=retrieval_func,
         enable_kb_tool=ablation_cfg.get("use_knowledge_base", True),
     )
 
-    # 6. 初始化任务运行器
-    contrastive_cfg = config.get("contrastive", {})
+    # 6. 初始化 contrastive reranker
     contrastive_reranker = None
-
     if (
         contrastive_cfg.get("enabled", False)
         and contrastive_cfg.get("rerank_enabled", False)
@@ -119,6 +130,10 @@ async def main():
         )
         contrastive_reranker = ContrastiveReranker(infer_engine)
 
+    # 7. 初始化 memory policy
+    memory_policy = build_memory_policy(config)
+
+    # 8. 初始化任务运行器
     experiment_id = args.experiment_id or datetime.now().strftime("exp_%Y%m%d_%H%M%S")
     print(f"[Experiment] 当前实验ID: {experiment_id}")
 
@@ -132,9 +147,10 @@ async def main():
         contrastive_cfg=contrastive_cfg,
         contrastive_reranker=contrastive_reranker,
         experiment_id=experiment_id,
+        memory_policy=memory_policy,
     )
 
-    # 7. 执行任务
+    # 9. 执行任务
     try:
         tasks = load_tasks(args.tasks_file)
 
