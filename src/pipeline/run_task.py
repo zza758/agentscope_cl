@@ -321,6 +321,8 @@ class TaskRunner:
             "task_id": task_id,
             "query": query,
             "final_answer": final_answer,
+            "memory_summary": memory_summary,
+            "strategy_note": strategy_note,
             "latency_ms": latency_ms,
             "used_memories": memories,
         }

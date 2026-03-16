@@ -28,7 +28,6 @@ memory:
   persistent: true
   deduplicate: true
   top_k: 3
-  write_memory_after_task: true
   storage_path: "data/memory/memory_bank.jsonl"
 
 embedding:
@@ -55,7 +54,7 @@ contrastive:
   train_enabled: true
   rerank_enabled: true
 
-  train_data_path: "data/contrastive/memory_contrastive_samples.jsonl"
+  train_data_path: "data/contrastive/baseline_12_hard/memory_contrastive_samples.jsonl"
   output_dir: "outputs/contrastive"
   model_dir: "outputs/contrastive/contrastive_encoder"
 

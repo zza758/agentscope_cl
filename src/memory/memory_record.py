@@ -18,7 +18,7 @@ class MemoryRecord:
         return asdict(self)
 
     def to_retrieval_text(self) -> str:
-        return self.memory_summary.strip()
+        return (self.memory_summary or self.answer_raw).strip()
 
     def to_log_text(self) -> str:
         return (

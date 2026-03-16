@@ -35,8 +35,8 @@ class ContrastiveMemoryDataset(Dataset):
         item = self.records[idx]
         return {
             "query": item["query"],
-            "positive": item.get("positive_memory_summary", item.get("positive_memory", "")),
-            "negative": item.get("negative_memory_summary", item.get("negative_memory", "")),
+            "positive": item["positive_memory_summary"],
+            "negative": item["negative_memory_summary"],
         }
 
 
@@ -58,13 +58,13 @@ class ContrastiveEncoder(nn.Module):
         return embeddings
 
     def forward(
-        self,
-        q_input_ids,
-        q_attention_mask,
-        p_input_ids,
-        p_attention_mask,
-        n_input_ids,
-        n_attention_mask,
+            self,
+            q_input_ids,
+            q_attention_mask,
+            p_input_ids,
+            p_attention_mask,
+            n_input_ids,
+            n_attention_mask,
     ):
         q_emb = self.encode(q_input_ids, q_attention_mask)
         p_emb = self.encode(p_input_ids, p_attention_mask)

@@ -8,6 +8,7 @@ import numpy as np
 from src.runtime.task_context import TaskContext
 from .base_memory import BaseMemoryManager
 from .memory_record import MemoryRecord
+from src.runtime.history_guard import is_legal_history_record
 
 
 def parse_iso_time(value: Optional[str]) -> Optional[datetime]:
@@ -102,30 +103,6 @@ class VectorMemoryManager(BaseMemoryManager):
             return 0.0
         return float(np.dot(a, b) / denom)
 
-    @staticmethod
-    def _is_history_memory(mem: Dict[str, Any], task_context: TaskContext) -> bool:
-        # 1) 实验隔离
-        if mem.get("experiment_id") != task_context.experiment_id:
-            return False
-
-        # 2) 任务顺序过滤
-        mem_order = mem.get("task_order")
-        if mem_order is None:
-            return False
-
-        if mem_order >= task_context.task_order:
-            return False
-
-        # 3) 写入时间必须早于当前任务开始时间
-        mem_created_at = parse_iso_time(mem.get("created_at"))
-        if mem_created_at is None:
-            return False
-
-        if mem_created_at >= task_context.task_start_time:
-            return False
-
-        return True
-
     def retrieve_memory(
         self,
         query: str,
@@ -155,7 +132,7 @@ class VectorMemoryManager(BaseMemoryManager):
         scored = []
 
         for mem in self._memory_bank:
-            if not self._is_history_memory(mem, task_context=task_context):
+            if not is_legal_history_record(mem, task_context):
                 continue
 
             emb = mem.get("embedding")

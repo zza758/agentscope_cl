@@ -7,7 +7,7 @@ import math
 
 from src.memory.embedder import DashScopeEmbedder
 from src.utils.config_loader import load_config
-
+from src.runtime.history_guard import is_legal_history_record
 
 def normalize_summary_text(text: str) -> str:
     if not text:

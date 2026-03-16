@@ -8,6 +8,7 @@ import jieba
 from src.runtime.task_context import TaskContext
 from .base_memory import BaseMemoryManager
 from .memory_record import MemoryRecord
+from src.runtime.history_guard import is_legal_history_record
 
 
 def tokenize_zh(text: str) -> List[str]:
@@ -95,27 +96,6 @@ class KeywordMemoryManager(BaseMemoryManager):
         with open(self.storage_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    @staticmethod
-    def _is_history_memory(mem: Dict[str, Any], task_context: TaskContext) -> bool:
-        if mem.get("experiment_id") != task_context.experiment_id:
-            return False
-
-        mem_order = mem.get("task_order")
-        if mem_order is None:
-            return False
-
-        if mem_order >= task_context.task_order:
-            return False
-
-        mem_created_at = parse_iso_time(mem.get("created_at"))
-        if mem_created_at is None:
-            return False
-
-        if mem_created_at >= task_context.task_start_time:
-            return False
-
-        return True
-
     def retrieve_memory(
         self,
         query: str,
@@ -142,7 +122,7 @@ class KeywordMemoryManager(BaseMemoryManager):
         scored = []
 
         for mem in self._memory_bank:
-            if not self._is_history_memory(mem, task_context=task_context):
+            if not is_legal_history_record(mem, task_context):
                 continue
 
             content = mem.get("memory_summary", mem.get("content", ""))

@@ -2,22 +2,36 @@ import asyncio
 import argparse
 from pathlib import Path
 from datetime import datetime
-from agents.main_agent import build_main_agent
-from memory.embedder import DashScopeEmbedder
-from memory.keyword_memory import KeywordMemoryManager
-from memory.vector_memory import VectorMemoryManager
-from pipeline.run_task import TaskRunner
-from storage.mysql_logger import MySQLLogger
-from tools.retrieval_tool import SimpleKnowledgeBase
-from utils.config_loader import load_config, PROJECT_ROOT
-from reranker.contrastive_reranker import ContrastiveReranker
-from training.contrastive_infer import ContrastiveEncoderInfer
+from src.agents.main_agent import build_main_agent
+from src.memory.embedder import DashScopeEmbedder
+from src.memory.keyword_memory import KeywordMemoryManager
+from src.memory.vector_memory import VectorMemoryManager
+from src.pipeline.run_task import TaskRunner
+from src.storage.mysql_logger import MySQLLogger
+from src.tools.retrieval_tool import SimpleKnowledgeBase
+from src.utils.config_loader import load_config, PROJECT_ROOT
+from src.reranker.contrastive_reranker import ContrastiveReranker
+from src.training.contrastive_infer import ContrastiveEncoderInfer
+
+
+def load_tasks(tasks_file: str):
+    import json
+    tasks = []
+    with open(tasks_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                tasks.append(json.loads(line))
+    tasks.sort(key=lambda x: x["task_order"])
+    return tasks
 
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["task1", "task2", "all"], default="all")
+    parser.add_argument("--tasks-file", type=str, required=True)
     parser.add_argument("--experiment-id", type=str, default=None)
+    parser.add_argument("--task-ids", type=str, default=None)
+    parser.add_argument("--max-tasks", type=int, default=None)
     args = parser.parse_args()
 
     config = load_config()
@@ -122,24 +136,23 @@ async def main():
 
     # 7. 执行任务
     try:
-        if args.mode in ("task1", "all"):
-            result1 = await runner.run_single_task(
-                task_id="task_001",
-                task_order=1,
-                query="请总结张三项目的核心目标。",
-            )
-            print("第一次任务结果：")
-            print(result1)
+        tasks = load_tasks(args.tasks_file)
 
-        if args.mode in ("task2", "all"):
-            result2 = await runner.run_single_task(
-                task_id="task_002",
-                task_order=2,
-                query="继续概括一下张三项目的主要目标与重点。",
-            )
-            print("第二次任务结果：")
-            print(result2)
+        if args.task_ids:
+            allow = {x.strip() for x in args.task_ids.split(",") if x.strip()}
+            tasks = [t for t in tasks if t["task_id"] in allow]
 
+        if args.max_tasks is not None:
+            tasks = tasks[:args.max_tasks]
+
+        for task in tasks:
+            result = await runner.run_single_task(
+                task_id=task["task_id"],
+                task_order=task["task_order"],
+                query=task["query"],
+            )
+            print(f"[{task['task_id']}]")
+            print(result)
     finally:
         mysql_logger.close()
 
