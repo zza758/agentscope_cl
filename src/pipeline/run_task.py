@@ -52,7 +52,7 @@ class TaskRunner:
         self.experiment_id = experiment_id
         self.memory_policy = memory_policy
 
-    def _retrieve_memories(self, query: str, task_context: TaskContext) -> List[Dict[str, Any]]:
+    def _retrieve_memories(self, query: str, task_context):
         if not self.ablation_cfg.get("use_memory", True):
             return []
 
@@ -72,27 +72,34 @@ class TaskRunner:
         )
 
         if (
-            self.ablation_cfg.get("use_contrastive_rerank", False)
-            and self.contrastive_cfg.get("rerank_enabled", False)
-            and self.contrastive_reranker is not None
-            and memory_items
+                self.ablation_cfg.get("use_contrastive_rerank", False)
+                and self.contrastive_cfg.get("rerank_enabled", False)
+                and self.contrastive_reranker is not None
+                and memory_items
         ):
-            final_top_k = int(self.contrastive_cfg.get("final_top_k", self.memory_top_k))
+            # 只重排，不截断
             memory_items = self.contrastive_reranker.rerank(
                 query=query,
                 candidates=memory_items,
-                top_k=final_top_k,
+                top_k=None,
             )
 
+        # 先让 policy 从完整候选池里选
         if self.memory_policy is not None:
             memory_items = self.memory_policy.select_memories(
                 query=query,
                 task_context=task_context,
                 candidates=memory_items,
             )
+        else:
+            # 没有 policy 时，才按 final_top_k 截断
+            if self.contrastive_cfg.get("rerank_enabled", False):
+                final_top_k = int(self.contrastive_cfg.get("final_top_k", self.memory_top_k))
+                memory_items = memory_items[:final_top_k]
+            else:
+                memory_items = memory_items[: self.memory_top_k]
 
         return memory_items
-
     @staticmethod
     def _format_memory_items(memory_items: List[Dict[str, Any]]) -> str:
         if not memory_items:

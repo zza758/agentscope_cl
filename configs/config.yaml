@@ -46,7 +46,7 @@ ablation:
   use_memory_logging: true
   use_vector_memory: true
   use_contrastive_rerank: true
-  use_rl_policy: false
+  use_rl_policy: true
   use_memory_policy: false
   expose_reasoning: true
 

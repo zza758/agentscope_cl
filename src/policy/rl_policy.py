@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -11,23 +12,24 @@ from src.policy.reward import compute_memory_selection_reward
 
 class RLMemoryPolicy(BaseMemoryPolicy):
     """
-    这里先实现成 contextual bandit（LinUCB）版本。
-    不是 PPO，不依赖 GPU，可以先在线收集和更新。
+    contextual bandit（LinUCB）版本。
+    不依赖 GPU，可先在线收集和离线更新。
+    这里不再使用任何写死实体/任务类型规则，只使用通用特征。
     """
 
-    FEATURE_DIM = 8
+    FEATURE_DIM = 9
 
     def __init__(
-            self,
-            max_select_k: int = 3,
-            min_summary_len: int = 10,
-            alpha: float = 0.5,
-            model_path: str = "outputs/rl_policy/linucb_state.json",
-            log_path: str = "outputs/rl_policy/decision_log.jsonl",
-            online_update: bool = False,
-            write_reward: float = 0.2,
-            hit_reward: float = 1.0,
-            miss_penalty: float = -0.2,
+        self,
+        max_select_k: int = 3,
+        min_summary_len: int = 10,
+        alpha: float = 0.5,
+        model_path: str = "outputs/rl_policy/linucb_state.json",
+        log_path: str = "outputs/rl_policy/decision_log.jsonl",
+        online_update: bool = False,
+        write_reward: float = 0.2,
+        hit_reward: float = 1.0,
+        miss_penalty: float = -0.2,
     ):
         self.max_select_k = max_select_k
         self.min_summary_len = min_summary_len
@@ -52,15 +54,62 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         except Exception:
             return default
 
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return ""
+        return text.strip().lower()
+
+    def _tokenize(self, text: str) -> List[str]:
+        """
+        通用轻量分词：
+        - 英文词
+        - 数字
+        - 中文单字
+        """
+        text = self._normalize_text(text)
+        if not text:
+            return []
+
+        tokens: List[str] = []
+
+        # 英文词 / 数字
+        tokens.extend(re.findall(r"[a-z]+|\d+", text))
+
+        # 中文单字
+        tokens.extend(re.findall(r"[\u4e00-\u9fff]", text))
+
+        return tokens
+
+    def _overlap_ratio(self, query: str, content: str) -> float:
+        q_tokens = self._tokenize(query)
+        c_tokens = self._tokenize(content)
+        if not q_tokens or not c_tokens:
+            return 0.0
+
+        q_set = set(q_tokens)
+        c_set = set(c_tokens)
+        overlap = len(q_set & c_set)
+        return overlap / max(len(q_set), 1)
+
+    def _jaccard(self, query: str, content: str) -> float:
+        q_tokens = set(self._tokenize(query))
+        c_tokens = set(self._tokenize(content))
+        if not q_tokens or not c_tokens:
+            return 0.0
+        union = q_tokens | c_tokens
+        inter = q_tokens & c_tokens
+        return len(inter) / max(len(union), 1)
+
     def _feature_vector(
-            self,
-            item: Dict[str, Any],
-            rank_idx: int,
-            task_context,
-            query: str,
+        self,
+        item: Dict[str, Any],
+        rank_idx: int,
+        task_context,
+        query: str,
     ) -> np.ndarray:
         base_score = self._safe_float(item.get("score"), 0.0)
         rerank_score = self._safe_float(item.get("contrastive_score"), 0.0)
+        base_minus_rerank = base_score - rerank_score
 
         mem_task_order = item.get("task_order")
         if mem_task_order is None:
@@ -74,30 +123,26 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         has_rerank = 1.0 if item.get("contrastive_score") is not None else 0.0
         rank_feature = 1.0 / float(rank_idx + 1)
 
-        query_entity = self._infer_entity_from_query(query)
-        mem_entity = self._infer_entity_from_memory(item)
-        entity_match = 1.0 if query_entity == mem_entity and query_entity != "unknown" else 0.0
-
-        query_task_type = self._infer_task_type_from_query(query)
-        mem_task_type = self._infer_task_type_from_memory(item)
-        task_type_match = 1.0 if query_task_type == mem_task_type and query_task_type != "other" else 0.0
+        overlap_ratio = self._overlap_ratio(query, content)
+        jaccard = self._jaccard(query, content)
 
         return np.array([
             base_score,
             rerank_score,
+            base_minus_rerank,
             rank_feature,
             order_gap / 20.0,
             content_len,
             has_rerank,
-            entity_match,
-            task_type_match,
+            overlap_ratio,
+            jaccard,
         ], dtype=np.float64)
 
     def select_memories(
-            self,
-            query: str,
-            task_context,
-            candidates: List[Dict[str, Any]],
+        self,
+        query: str,
+        task_context,
+        candidates: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         scored = []
         for idx, item in enumerate(candidates):
@@ -113,12 +158,12 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         return scored[: self.max_select_k]
 
     def should_write_memory(
-            self,
-            query: str,
-            task_context,
-            final_answer: str,
-            memory_summary: str,
-            strategy_note: str,
+        self,
+        query: str,
+        task_context,
+        final_answer: str,
+        memory_summary: str,
+        strategy_note: str,
     ) -> bool:
         if not memory_summary:
             return False
@@ -127,10 +172,10 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         return True
 
     def _compute_reward(
-            self,
-            selected_memories,
-            memory_written: bool,
-            support_task_ids=None,
+        self,
+        selected_memories,
+        memory_written: bool,
+        support_task_ids=None,
     ) -> float:
         return compute_memory_selection_reward(
             selected_memories=selected_memories,
@@ -142,18 +187,18 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         )
 
     def on_task_end(
-            self,
-            query: str,
-            task_context,
-            selected_memories,
-            final_answer: str,
-            memory_summary: str,
-            strategy_note: str,
-            memory_written: bool = True,
-            latency_ms=None,
-            task_id=None,
-            task_order=None,
-            support_task_ids=None,
+        self,
+        query: str,
+        task_context,
+        selected_memories,
+        final_answer: str,
+        memory_summary: str,
+        strategy_note: str,
+        memory_written: bool = True,
+        latency_ms=None,
+        task_id=None,
+        task_order=None,
+        support_task_ids=None,
     ) -> None:
         reward = self._compute_reward(
             selected_memories=selected_memories,
@@ -196,51 +241,3 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_record, ensure_ascii=False) + "\n")
-
-    def _infer_entity_from_query(self, query: str) -> str:
-        q = query.lower()
-        if "张三" in query:
-            return "zhangsan"
-        if "李四" in query:
-            return "lisi"
-        if "mike" in q:
-            return "mike"
-        if "jack" in q:
-            return "jack"
-        return "unknown"
-
-    def _infer_task_type_from_query(self, query: str) -> str:
-        q = query.lower()
-        if "比较" in query or "compare" in q:
-            return "comparison"
-        if "建议" in query or "suggestion" in q:
-            return "suggestion"
-        if "设计思路" in query or "strategy" in q:
-            return "strategy"
-        if "概括" in query or "summarize" in q or "总结" in query:
-            return "summary"
-        return "other"
-
-    def _infer_entity_from_memory(self, item: dict) -> str:
-        text = (item.get("content") or "").lower()
-        if "张三" in text:
-            return "zhangsan"
-        if "李四" in text:
-            return "lisi"
-        if "mike" in text:
-            return "mike"
-        if "jack" in text:
-            return "jack"
-        return "unknown"
-
-    def _infer_task_type_from_memory(self, item: dict) -> str:
-        text = (item.get("content") or "").lower()
-        if "比较" in text or "compare" in text:
-            return "comparison"
-        if "建议" in text or "suggestion" in text:
-            return "suggestion"
-        if "设计思路" in text or "strategy" in text:
-            return "strategy"
-        if "概括" in text or "summarize" in text or "总结" in text:
-            return "summary"
-        return "other"
