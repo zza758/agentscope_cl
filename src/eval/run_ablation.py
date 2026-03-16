@@ -1,8 +1,8 @@
 import argparse
 import asyncio
 import json
-from pathlib import Path
 from copy import deepcopy
+from pathlib import Path
 
 from src.app import load_tasks
 from src.agents.main_agent import build_main_agent
@@ -10,11 +10,34 @@ from src.memory.embedder import DashScopeEmbedder
 from src.memory.keyword_memory import KeywordMemoryManager
 from src.memory.vector_memory import VectorMemoryManager
 from src.pipeline.run_task import TaskRunner
+from src.policy.rl_policy import RLMemoryPolicy
+from src.policy.rule_policy import RuleBasedMemoryPolicy
+from src.reranker.contrastive_reranker import ContrastiveReranker
 from src.storage.mysql_logger import MySQLLogger
 from src.tools.retrieval_tool import SimpleKnowledgeBase
-from src.utils.config_loader import load_config, PROJECT_ROOT
-from src.reranker.contrastive_reranker import ContrastiveReranker
 from src.training.contrastive_infer import ContrastiveEncoderInfer
+from src.utils.config_loader import PROJECT_ROOT, load_config
+
+
+def build_memory_policy(config: dict):
+    ablation_cfg = config["ablation"]
+    memory_cfg = config["memory"]
+    policy_cfg = config.get("memory_policy", {})
+
+    if ablation_cfg.get("use_rl_policy", False):
+        return RLMemoryPolicy(
+            max_select_k=policy_cfg.get("max_select_k", memory_cfg.get("top_k", 3)),
+            min_summary_len=policy_cfg.get("min_summary_len", 10),
+            score_threshold=policy_cfg.get("score_threshold", 0.0),
+        )
+
+    if ablation_cfg.get("use_memory_policy", False):
+        return RuleBasedMemoryPolicy(
+            max_select_k=policy_cfg.get("max_select_k", memory_cfg.get("top_k", 3)),
+            min_summary_len=policy_cfg.get("min_summary_len", 10),
+        )
+
+    return None
 
 
 def build_runtime(config: dict, experiment_id: str):
@@ -89,6 +112,8 @@ def build_runtime(config: dict, experiment_id: str):
         )
         contrastive_reranker = ContrastiveReranker(infer_engine)
 
+    memory_policy = build_memory_policy(config)
+
     runner = TaskRunner(
         agent=agent,
         memory_manager=memory_manager,
@@ -99,12 +124,16 @@ def build_runtime(config: dict, experiment_id: str):
         contrastive_cfg=contrastive_cfg,
         contrastive_reranker=contrastive_reranker,
         experiment_id=experiment_id,
+        memory_policy=memory_policy,
     )
     return runner, mysql_logger
 
 
 async def run_setting(base_config: dict, tasks_file: str, experiment_id: str, setting_name: str, output_file: Path):
     config = deepcopy(base_config)
+
+    config["ablation"]["use_memory_policy"] = False
+    config["ablation"]["use_rl_policy"] = False
 
     if setting_name == "memory_off_rerank_off":
         config["ablation"]["use_memory"] = False
@@ -115,6 +144,14 @@ async def run_setting(base_config: dict, tasks_file: str, experiment_id: str, se
     elif setting_name == "memory_on_rerank_on":
         config["ablation"]["use_memory"] = True
         config["ablation"]["use_contrastive_rerank"] = True
+    elif setting_name == "memory_on_rerank_on_policy_on":
+        config["ablation"]["use_memory"] = True
+        config["ablation"]["use_contrastive_rerank"] = True
+        config["ablation"]["use_memory_policy"] = True
+    elif setting_name == "memory_on_rerank_on_rl_policy":
+        config["ablation"]["use_memory"] = True
+        config["ablation"]["use_contrastive_rerank"] = True
+        config["ablation"]["use_rl_policy"] = True
     else:
         raise ValueError(f"unknown setting: {setting_name}")
 
@@ -154,6 +191,8 @@ async def main():
         "memory_off_rerank_off",
         "memory_on_rerank_off",
         "memory_on_rerank_on",
+        "memory_on_rerank_on_policy_on",
+        "memory_on_rerank_on_rl_policy",
     ]
 
     for setting_name in settings:

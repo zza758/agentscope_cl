@@ -76,3 +76,4 @@ eval:
 memory_policy:
   max_select_k: 3
   min_summary_len: 10
+  score_threshold: 0.0
