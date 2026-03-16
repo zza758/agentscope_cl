@@ -1,12 +1,12 @@
-{"task_id":"task_001","task_order":1,"query":"请总结张三项目的核心目标。"}
-{"task_id":"task_002","task_order":2,"query":"请总结李四项目的核心目标。"}
-{"task_id":"task_003","task_order":3,"query":"Please summarize the core goals of Mike's project."}
-{"task_id":"task_004","task_order":4,"query":"Please summarize the core goals of Jack's project."}
-{"task_id":"task_005","task_order":5,"query":"继续概括一下张三项目的主要目标与重点。"}
-{"task_id":"task_006","task_order":6,"query":"继续概括一下李四项目的主要目标与重点。"}
-{"task_id":"task_007","task_order":7,"query":"Further summarize Mike's project goals and key modules."}
-{"task_id":"task_008","task_order":8,"query":"Further summarize Jack's project goals and key highlights."}
-{"task_id":"task_009","task_order":9,"query":"请说明张三项目在长期记忆与知识检索协同方面的设计思路。"}
-{"task_id":"task_010","task_order":10,"query":"请说明李四项目在任务规划与工具协同方面的设计思路。"}
-{"task_id":"task_011","task_order":11,"query":"Explain Mike's design strategy for multilingual retrieval and adaptive long-term memory."}
-{"task_id":"task_012","task_order":12,"query":"Explain Jack's design strategy for lightweight memory management and cost-aware execution."}
+{"task_id":"task_001","task_order":1,"query":"请总结张三项目的核心目标。","support_memory_task_ids":[]}
+{"task_id":"task_002","task_order":2,"query":"请总结李四项目的核心目标。","support_memory_task_ids":[]}
+{"task_id":"task_003","task_order":3,"query":"Please summarize the core goals of Mike's project.","support_memory_task_ids":[]}
+{"task_id":"task_004","task_order":4,"query":"Please summarize the core goals of Jack's project.","support_memory_task_ids":[]}
+{"task_id":"task_005","task_order":5,"query":"继续概括一下张三项目的主要目标与重点。","support_memory_task_ids":["task_001"]}
+{"task_id":"task_006","task_order":6,"query":"继续概括一下李四项目的主要目标与重点。","support_memory_task_ids":["task_002"]}
+{"task_id":"task_007","task_order":7,"query":"Further summarize Mike's project goals and key modules.","support_memory_task_ids":["task_003"]}
+{"task_id":"task_008","task_order":8,"query":"Further summarize Jack's project goals and key highlights.","support_memory_task_ids":["task_004"]}
+{"task_id":"task_009","task_order":9,"query":"请说明张三项目在长期记忆与知识检索协同方面的设计思路。","support_memory_task_ids":["task_001","task_005"]}
+{"task_id":"task_010","task_order":10,"query":"请说明李四项目在任务规划与工具协同方面的设计思路。","support_memory_task_ids":["task_002","task_006"]}
+{"task_id":"task_011","task_order":11,"query":"Explain Mike's design strategy for multilingual retrieval and adaptive long-term memory.","support_memory_task_ids":["task_003","task_007"]}
+{"task_id":"task_012","task_order":12,"query":"Explain Jack's design strategy for lightweight memory management and cost-aware execution.","support_memory_task_ids":["task_004","task_008"]}

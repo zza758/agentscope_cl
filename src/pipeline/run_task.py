@@ -114,7 +114,13 @@ class TaskRunner:
 
         return "\n".join(lines)
 
-    async def run_single_task(self, task_id: str, task_order: int, query: str) -> Dict[str, Any]:
+    async def run_single_task(
+            self,
+            task_id: str,
+            task_order: int,
+            query: str,
+            support_task_ids=None,
+    ) -> Dict[str, Any]:
         start_time = time.time()
         task_start_time = datetime.now()
 
@@ -280,6 +286,7 @@ class TaskRunner:
                 latency_ms=latency_ms,
                 task_id=task_id,
                 task_order=task_order,
+                support_task_ids=support_task_ids,
             )
 
         return {

@@ -181,6 +181,7 @@ async def main():
                 task_id=task["task_id"],
                 task_order=task["task_order"],
                 query=task["query"],
+                support_task_ids=task.get("support_memory_task_ids", []),
             )
             print(f"[{task['task_id']}]")
             print(result)

@@ -6,6 +6,7 @@ import numpy as np
 
 from src.policy.bandit_model import LinUCBModel
 from src.policy.base_policy import BaseMemoryPolicy
+from src.policy.reward import compute_memory_selection_reward
 
 
 class RLMemoryPolicy(BaseMemoryPolicy):
@@ -115,41 +116,38 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         return True
 
     def _compute_reward(
-        self,
-        selected_memories: List[Dict[str, Any]],
-        memory_written: bool,
+            self,
+            selected_memories,
+            memory_written: bool,
+            support_task_ids=None,
     ) -> float:
-        reward = 0.0
-
-        for item in selected_memories:
-            if item.get("contrastive_score") is not None:
-                reward += self.hit_reward * max(float(item.get("contrastive_score", 0.0)), 0.0)
-            elif item.get("score") is not None:
-                reward += 0.3 * max(float(item.get("score", 0.0)), 0.0)
-            else:
-                reward += self.miss_penalty
-
-        if memory_written:
-            reward += self.write_reward
-
-        return reward
+        return compute_memory_selection_reward(
+            selected_memories=selected_memories,
+            support_task_ids=support_task_ids,
+            memory_written=memory_written,
+            write_reward=self.write_reward,
+            hit_reward=self.hit_reward,
+            miss_penalty=self.miss_penalty,
+        )
 
     def on_task_end(
-        self,
-        query: str,
-        task_context,
-        selected_memories: List[Dict[str, Any]],
-        final_answer: str,
-        memory_summary: str,
-        strategy_note: str,
-        memory_written: bool = True,
-        latency_ms: Optional[int] = None,
-        task_id: Optional[str] = None,
-        task_order: Optional[int] = None,
+            self,
+            query: str,
+            task_context,
+            selected_memories,
+            final_answer: str,
+            memory_summary: str,
+            strategy_note: str,
+            memory_written: bool = True,
+            latency_ms=None,
+            task_id=None,
+            task_order=None,
+            support_task_ids=None,
     ) -> None:
         reward = self._compute_reward(
             selected_memories=selected_memories,
             memory_written=memory_written,
+            support_task_ids=support_task_ids,
         )
 
         if self.online_update:
@@ -179,6 +177,7 @@ class RLMemoryPolicy(BaseMemoryPolicy):
             ],
             "memory_summary": memory_summary,
             "strategy_note": strategy_note,
+            "support_task_ids": support_task_ids or [],
         }
 
         p = Path(self.log_path)
