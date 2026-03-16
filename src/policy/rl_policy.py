@@ -18,16 +18,16 @@ class RLMemoryPolicy(BaseMemoryPolicy):
     FEATURE_DIM = 6
 
     def __init__(
-        self,
-        max_select_k: int = 3,
-        min_summary_len: int = 10,
-        alpha: float = 0.5,
-        model_path: str = "outputs/rl_policy/linucb_state.json",
-        log_path: str = "outputs/rl_policy/decision_log.jsonl",
-        online_update: bool = False,
-        write_reward: float = 0.2,
-        hit_reward: float = 1.0,
-        miss_penalty: float = -0.2,
+            self,
+            max_select_k: int = 3,
+            min_summary_len: int = 10,
+            alpha: float = 0.5,
+            model_path: str = "outputs/rl_policy/linucb_state.json",
+            log_path: str = "outputs/rl_policy/decision_log.jsonl",
+            online_update: bool = False,
+            write_reward: float = 0.2,
+            hit_reward: float = 1.0,
+            miss_penalty: float = -0.2,
     ):
         self.max_select_k = max_select_k
         self.min_summary_len = min_summary_len
@@ -53,10 +53,10 @@ class RLMemoryPolicy(BaseMemoryPolicy):
             return default
 
     def _feature_vector(
-        self,
-        item: Dict[str, Any],
-        rank_idx: int,
-        task_context,
+            self,
+            item: Dict[str, Any],
+            rank_idx: int,
+            task_context,
     ) -> np.ndarray:
         base_score = self._safe_float(item.get("score"), 0.0)
         rerank_score = self._safe_float(item.get("contrastive_score"), 0.0)
@@ -83,10 +83,10 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         ], dtype=np.float64)
 
     def select_memories(
-        self,
-        query: str,
-        task_context,
-        candidates: List[Dict[str, Any]],
+            self,
+            query: str,
+            task_context,
+            candidates: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         scored = []
         for idx, item in enumerate(candidates):
@@ -102,12 +102,12 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         return scored[: self.max_select_k]
 
     def should_write_memory(
-        self,
-        query: str,
-        task_context,
-        final_answer: str,
-        memory_summary: str,
-        strategy_note: str,
+            self,
+            query: str,
+            task_context,
+            final_answer: str,
+            memory_summary: str,
+            strategy_note: str,
     ) -> bool:
         if not memory_summary:
             return False
@@ -172,6 +172,7 @@ class RLMemoryPolicy(BaseMemoryPolicy):
                     "score": x.get("score"),
                     "contrastive_score": x.get("contrastive_score"),
                     "policy_score": x.get("policy_score"),
+                    "policy_feature": x.get("_policy_feature"),
                 }
                 for x in selected_memories
             ],
