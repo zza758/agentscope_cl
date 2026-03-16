@@ -37,12 +37,17 @@ class BaseMemoryPolicy(ABC):
         }
 
     def on_task_end(
-        self,
-        query: str,
-        task_context,
-        selected_memories: List[Dict[str, Any]],
-        final_answer: str,
-        memory_summary: str,
-        strategy_note: str,
+            self,
+            query: str,
+            task_context,
+            selected_memories: List[Dict[str, Any]],
+            final_answer: str,
+            memory_summary: str,
+            strategy_note: str,
+            memory_written: bool = True,
+            latency_ms=None,
+            task_id=None,
+            task_order=None,
+            support_task_ids=None,
     ) -> None:
         pass

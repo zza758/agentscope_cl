@@ -24,3 +24,19 @@ class RuleBasedMemoryPolicy(BaseMemoryPolicy):
         if len(memory_summary.strip()) < self.min_summary_len:
             return False
         return True
+
+    def on_task_end(
+            self,
+            query: str,
+            task_context,
+            selected_memories,
+            final_answer: str,
+            memory_summary: str,
+            strategy_note: str,
+            memory_written: bool = True,
+            latency_ms=None,
+            task_id=None,
+            task_order=None,
+            support_task_ids=None,
+    ) -> None:
+        return None

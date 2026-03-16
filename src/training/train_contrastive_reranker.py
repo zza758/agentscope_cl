@@ -141,6 +141,9 @@ def train():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
+    print("torch_cuda_available =", torch.cuda.is_available())
+    if torch.cuda.is_available():
+        print("torch_device_name =", torch.cuda.get_device_name(0))
 
     dataset = ContrastiveMemoryDataset(records)
     dataloader = DataLoader(
