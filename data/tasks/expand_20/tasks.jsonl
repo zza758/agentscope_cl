@@ -1,0 +1,20 @@
+{"task_id":"task_001","task_order":1,"query":"请总结张三项目的核心目标。"}
+{"task_id":"task_002","task_order":2,"query":"请总结李四项目的核心目标。"}
+{"task_id":"task_003","task_order":3,"query":"Please summarize the core goals of Mike's project."}
+{"task_id":"task_004","task_order":4,"query":"Please summarize the core goals of Jack's project."}
+{"task_id":"task_005","task_order":5,"query":"继续概括一下张三项目的主要目标与重点。"}
+{"task_id":"task_006","task_order":6,"query":"继续概括一下李四项目的主要目标与重点。"}
+{"task_id":"task_007","task_order":7,"query":"Further summarize Mike's project goals and key modules."}
+{"task_id":"task_008","task_order":8,"query":"Further summarize Jack's project goals and key highlights."}
+{"task_id":"task_009","task_order":9,"query":"请概括张三项目如何通过长期记忆与知识检索增强持续学习效果。"}
+{"task_id":"task_010","task_order":10,"query":"请概括李四项目如何通过任务规划与工具编排提升复杂任务处理能力。"}
+{"task_id":"task_011","task_order":11,"query":"Summarize how Mike's project combines multilingual retrieval with adaptive memory."}
+{"task_id":"task_012","task_order":12,"query":"Summarize how Jack's project balances lightweight deployment, memory efficiency, and execution cost."}
+{"task_id":"task_013","task_order":13,"query":"请比较张三项目与李四项目在系统设计侧重点上的差异。"}
+{"task_id":"task_014","task_order":14,"query":"Compare Mike's project and Jack's project in terms of memory design and system focus."}
+{"task_id":"task_015","task_order":15,"query":"请比较张三项目与 Mike 项目在检索增强方面的异同。"}
+{"task_id":"task_016","task_order":16,"query":"Compare Li Si's project and Jack's project in terms of planning and efficiency."}
+{"task_id":"task_017","task_order":17,"query":"请围绕长期记忆冗余与检索噪声，为张三项目提出两条优化建议。"}
+{"task_id":"task_018","task_order":18,"query":"请围绕工具链复杂度与系统稳定性，为李四项目提出两条优化建议。"}
+{"task_id":"task_019","task_order":19,"query":"Give two suggestions for Mike's project focusing on cross-lingual alignment and semantic drift."}
+{"task_id":"task_020","task_order":20,"query":"Give two suggestions for Jack's project focusing on memory pruning and retrieval effectiveness."}
