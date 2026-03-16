@@ -7,7 +7,7 @@ import math
 
 from src.memory.embedder import DashScopeEmbedder
 from src.utils.config_loader import load_config
-from src.runtime.history_guard import is_legal_history_record
+
 
 def normalize_summary_text(text: str) -> str:
     if not text:
@@ -138,11 +138,11 @@ def is_legal_history_memory(
 
 
 def select_hard_negative_candidate(
-    query: str,
-    legal_candidates: List[Dict[str, Any]],
-    positive_task_ids: set,
-    positive_summaries: set,
-    embedder,
+        query: str,
+        legal_candidates: List[Dict[str, Any]],
+        positive_task_ids: set,
+        positive_summaries: set,
+        embedder,
 ) -> Optional[Dict[str, Any]]:
     """
     从合法历史候选中挑选 hard negative：
@@ -322,10 +322,10 @@ def main():
     project_root = Path(__file__).resolve().parents[2]
 
     memory_path = project_root / "data" / "memory" / "memory_bank.jsonl"
-    task_label_path = project_root / "data" / "tasks" / "contrastive_task_labels.jsonl"
+    task_label_path = project_root / "data" / "tasks" / "baseline_12" / "labels.jsonl"
 
-    output_path = project_root / "data" / "contrastive" / "memory_contrastive_samples.jsonl"
-    meta_path = project_root / "data" / "contrastive" / "memory_contrastive_meta.json"
+    output_path = project_root / "data" / "contrastive" / "baseline_12_hard" / "memory_contrastive_samples.jsonl"
+    meta_path = project_root / "data" / "contrastive" / "baseline_12_hard" / "memory_contrastive_meta.json"
 
     memory_records = load_jsonl(memory_path)
     task_labels = load_jsonl(task_label_path)
