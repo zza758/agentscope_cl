@@ -173,6 +173,7 @@ async def run_setting(base_config: dict, tasks_file: str, experiment_id: str, se
                     task_id=task["task_id"],
                     task_order=task["task_order"],
                     query=task["query"],
+                    support_task_ids=task.get("support_memory_task_ids", []),
                 )
                 result["setting_name"] = setting_name
                 f.write(json.dumps(result, ensure_ascii=False) + "\n")

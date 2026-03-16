@@ -15,7 +15,7 @@ class RLMemoryPolicy(BaseMemoryPolicy):
     不是 PPO，不依赖 GPU，可以先在线收集和更新。
     """
 
-    FEATURE_DIM = 6
+    FEATURE_DIM = 8
 
     def __init__(
             self,
@@ -57,6 +57,7 @@ class RLMemoryPolicy(BaseMemoryPolicy):
             item: Dict[str, Any],
             rank_idx: int,
             task_context,
+            query: str,
     ) -> np.ndarray:
         base_score = self._safe_float(item.get("score"), 0.0)
         rerank_score = self._safe_float(item.get("contrastive_score"), 0.0)
@@ -73,6 +74,14 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         has_rerank = 1.0 if item.get("contrastive_score") is not None else 0.0
         rank_feature = 1.0 / float(rank_idx + 1)
 
+        query_entity = self._infer_entity_from_query(query)
+        mem_entity = self._infer_entity_from_memory(item)
+        entity_match = 1.0 if query_entity == mem_entity and query_entity != "unknown" else 0.0
+
+        query_task_type = self._infer_task_type_from_query(query)
+        mem_task_type = self._infer_task_type_from_memory(item)
+        task_type_match = 1.0 if query_task_type == mem_task_type and query_task_type != "other" else 0.0
+
         return np.array([
             base_score,
             rerank_score,
@@ -80,6 +89,8 @@ class RLMemoryPolicy(BaseMemoryPolicy):
             order_gap / 20.0,
             content_len,
             has_rerank,
+            entity_match,
+            task_type_match,
         ], dtype=np.float64)
 
     def select_memories(
@@ -90,7 +101,7 @@ class RLMemoryPolicy(BaseMemoryPolicy):
     ) -> List[Dict[str, Any]]:
         scored = []
         for idx, item in enumerate(candidates):
-            x = self._feature_vector(item, idx, task_context)
+            x = self._feature_vector(item, idx, task_context, query)
             bandit_score = self.model.score(x)
 
             enriched = dict(item)
@@ -185,3 +196,51 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_record, ensure_ascii=False) + "\n")
+
+    def _infer_entity_from_query(self, query: str) -> str:
+        q = query.lower()
+        if "张三" in query:
+            return "zhangsan"
+        if "李四" in query:
+            return "lisi"
+        if "mike" in q:
+            return "mike"
+        if "jack" in q:
+            return "jack"
+        return "unknown"
+
+    def _infer_task_type_from_query(self, query: str) -> str:
+        q = query.lower()
+        if "比较" in query or "compare" in q:
+            return "comparison"
+        if "建议" in query or "suggestion" in q:
+            return "suggestion"
+        if "设计思路" in query or "strategy" in q:
+            return "strategy"
+        if "概括" in query or "summarize" in q or "总结" in query:
+            return "summary"
+        return "other"
+
+    def _infer_entity_from_memory(self, item: dict) -> str:
+        text = (item.get("content") or "").lower()
+        if "张三" in text:
+            return "zhangsan"
+        if "李四" in text:
+            return "lisi"
+        if "mike" in text:
+            return "mike"
+        if "jack" in text:
+            return "jack"
+        return "unknown"
+
+    def _infer_task_type_from_memory(self, item: dict) -> str:
+        text = (item.get("content") or "").lower()
+        if "比较" in text or "compare" in text:
+            return "comparison"
+        if "建议" in text or "suggestion" in text:
+            return "suggestion"
+        if "设计思路" in text or "strategy" in text:
+            return "strategy"
+        if "概括" in text or "summarize" in text or "总结" in text:
+            return "summary"
+        return "other"
