@@ -47,6 +47,28 @@ def build_memory_policy(config: dict):
     return None
 
 
+def build_isolated_config(base_config: dict, output_root: Path, setting_name: str):
+    """
+    为每个 setting 构造独立配置，隔离：
+    - memory storage
+    - rl log
+    - rl model
+    """
+    config = deepcopy(base_config)
+    setting_dir = output_root / setting_name
+    setting_dir.mkdir(parents=True, exist_ok=True)
+
+    # memory 独立路径
+    config["memory"]["storage_path"] = str(setting_dir / "memory_bank.jsonl")
+
+    # RL 独立路径
+    if "rl_policy" in config:
+        config["rl_policy"]["log_path"] = str(setting_dir / "decision_log.jsonl")
+        config["rl_policy"]["model_path"] = str(setting_dir / "linucb_state.json")
+
+    return config
+
+
 def build_runtime(config: dict, experiment_id: str):
     ablation_cfg = config["ablation"]
     memory_cfg = config["memory"]
@@ -136,17 +158,29 @@ def build_runtime(config: dict, experiment_id: str):
     return runner, mysql_logger
 
 
+def filter_tasks(tasks, task_ids=None, max_tasks=None):
+    if task_ids:
+        allow = {x.strip() for x in task_ids if x and x.strip()}
+        tasks = [t for t in tasks if t["task_id"] in allow]
+
+    if max_tasks is not None:
+        tasks = tasks[:max_tasks]
+
+    return tasks
+
+
 async def run_setting(
     base_config: dict,
     tasks_file: str,
     experiment_id: str,
     setting_name: str,
-    output_file: Path,
+    output_root: Path,
     task_ids=None,
     max_tasks=None,
 ):
-    config = deepcopy(base_config)
+    config = build_isolated_config(base_config, output_root, setting_name)
 
+    # 默认关掉策略开关，再按 setting 打开
     config["ablation"]["use_memory_policy"] = False
     config["ablation"]["use_rl_policy"] = False
 
@@ -171,16 +205,15 @@ async def run_setting(
         raise ValueError(f"unknown setting: {setting_name}")
 
     runner, mysql_logger = build_runtime(config=config, experiment_id=experiment_id)
+
     tasks = load_tasks(tasks_file)
+    tasks = filter_tasks(tasks, task_ids=task_ids, max_tasks=max_tasks)
 
-    if task_ids:
-        allow = {x.strip() for x in task_ids if x.strip()}
-        tasks = [t for t in tasks if t["task_id"] in allow]
-
-    if max_tasks is not None:
-        tasks = tasks[:max_tasks]
-
+    output_file = output_root / f"{setting_name}.jsonl"
     output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[{setting_name}] tasks_to_run={len(tasks)}")
+
     try:
         with open(output_file, "w", encoding="utf-8") as f:
             for task in tasks:
@@ -200,22 +233,26 @@ async def run_setting(
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--settings", type=str, default=None)
-    parser.add_argument("--task-ids", type=str, default=None)
-    parser.add_argument("--max-tasks", type=int, default=None)
     parser.add_argument("--tasks-file", type=str, required=True)
     parser.add_argument("--experiment-prefix", type=str, required=True)
     parser.add_argument("--output-dir", type=str, default="outputs/eval")
+
+    parser.add_argument("--settings", type=str, default=None)
+    parser.add_argument("--task-ids", type=str, default=None)
+    parser.add_argument("--max-tasks", type=int, default=None)
+    parser.add_argument("--parallel-settings", type=int, default=1)
+
     args = parser.parse_args()
 
-    config = load_config()
+    base_config = load_config()
 
     output_root = Path(args.output_dir)
     if not output_root.is_absolute():
         output_root = PROJECT_ROOT / output_root
     output_root = output_root / args.experiment_prefix
+    output_root.mkdir(parents=True, exist_ok=True)
 
-    settings = [
+    all_settings = [
         "memory_off_rerank_off",
         "memory_on_rerank_off",
         "memory_on_rerank_on",
@@ -223,14 +260,31 @@ async def main():
         "memory_on_rerank_on_rl_policy",
     ]
 
-    for setting_name in settings:
-        await run_setting(
-            base_config=config,
-            tasks_file=args.tasks_file,
-            experiment_id=f"{args.experiment_prefix}_{setting_name}",
-            setting_name=setting_name,
-            output_file=output_root / f"{setting_name}.jsonl",
-        )
+    if args.settings:
+        settings = [x.strip() for x in args.settings.split(",") if x.strip()]
+    else:
+        settings = all_settings
+
+    task_ids = None
+    if args.task_ids:
+        task_ids = [x.strip() for x in args.task_ids.split(",") if x.strip()]
+
+    parallel_n = max(1, int(args.parallel_settings))
+    sem = asyncio.Semaphore(parallel_n)
+
+    async def bounded_run(setting_name: str):
+        async with sem:
+            await run_setting(
+                base_config=base_config,
+                tasks_file=args.tasks_file,
+                experiment_id=f"{args.experiment_prefix}_{setting_name}",
+                setting_name=setting_name,
+                output_root=output_root,
+                task_ids=task_ids,
+                max_tasks=args.max_tasks,
+            )
+
+    await asyncio.gather(*(bounded_run(s) for s in settings))
 
     print(f"评测完成，输出目录: {output_root}")
 
