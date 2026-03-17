@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 import numpy as np
 
@@ -261,7 +261,7 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         task_id=None,
         task_order=None,
         support_task_ids=None,
-    ) -> None:
+    ) -> dict[str, Union[float, str, int]]:
         reward = self._compute_reward(
             selected_memories=selected_memories,
             memory_written=memory_written,
@@ -307,3 +307,9 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_record, ensure_ascii=False) + "\n")
+
+        return {
+            "reward": reward,
+            "policy_name": "linucb",
+            "selected_count": len(selected_memories),
+        }

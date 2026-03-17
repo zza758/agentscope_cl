@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional
 
 from src.policy.base_policy import BaseMemoryPolicy
 
@@ -155,5 +155,5 @@ class RuleBasedMemoryPolicy(BaseMemoryPolicy):
         task_id=None,
         task_order=None,
         support_task_ids=None,
-    ) -> None:
-        return None
+    ) -> dict[str, Optional[str]]:
+        return {"reward": None, "policy_name": "rule"}

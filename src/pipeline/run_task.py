@@ -252,12 +252,14 @@ class TaskRunner:
                 task_id=task_id,
                 task_order=task_order,
                 query=query,
-                answer_raw=write_payload["answer_raw"],
-                memory_summary=write_payload["memory_summary"],
-                strategy_note=write_payload["strategy_note"],
-                created_at=MemoryRecord.now_ts(),
+                answer_raw=final_answer,
+                memory_summary=memory_summary,
+                strategy_note=strategy_note,
                 task_type=task_type,
                 entity=task_entity,
+                support_task_ids=support_task_ids or [],
+                created_at=MemoryRecord.now_ts(),
+                valid_from=task_start_time.strftime("%Y-%m-%d %H:%M:%S"),
             )
 
             self.mysql_logger.log_memory(
@@ -268,12 +270,53 @@ class TaskRunner:
                 relevance_score=None,
             )
 
+            memory_written = True
+            if self.memory_policy is not None:
+                memory_written = self.memory_policy.should_write_memory(
+                    query=query,
+                    task_context=task_context,
+                    final_answer=final_answer,
+                    memory_summary=memory_summary,
+                    strategy_note=strategy_note,
+                )
+
+            policy_feedback = None
+            latency_ms = int((time.time() - start_time) * 1000)
+            if self.memory_policy is not None:
+                policy_feedback = self.memory_policy.on_task_end(
+                    query=query,
+                    task_context=task_context,
+                    selected_memories=memory_items,
+                    final_answer=final_answer,
+                    memory_summary=memory_summary,
+                    strategy_note=strategy_note,
+                    memory_written=memory_written,
+                    latency_ms=latency_ms,
+                    task_id=task_id,
+                    task_order=task_order,
+                    support_task_ids=support_task_ids or [],
+                )
+
+            reward_score = None
+            if isinstance(policy_feedback, dict):
+                reward_score = policy_feedback.get("reward")
+
             if (
-                    self.ablation_cfg.get("use_memory", True)
+                    memory_written
+                    and self.ablation_cfg.get("use_memory", True)
                     and self.ablation_cfg.get("use_memory_write", True)
                     and self.memory_manager is not None
             ):
                 self.memory_manager.write_memory(memory_record)
+            else:
+                self.mysql_logger.log_memory(
+                    task_run_id=task_run_id,
+                    memory_key=f"task:{task_id}:skip_write",
+                    operation_type="skip_write",
+                    memory_content=memory_record.to_log_text(),
+                    relevance_score=None,
+                )
+
         else:
             self.mysql_logger.log_memory(
                 task_run_id=task_run_id,
@@ -283,13 +326,11 @@ class TaskRunner:
                 relevance_score=None,
             )
 
-        latency_ms = int((time.time() - start_time) * 1000)
-
         self.mysql_logger.update_task_result(
             task_run_id=task_run_id,
             final_answer=final_answer,
             success_flag=1,
-            reward_score=None,
+            reward_score=reward_score,
             token_cost=None,
             latency_ms=latency_ms,
         )

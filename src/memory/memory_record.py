@@ -1,6 +1,5 @@
-from dataclasses import dataclass, asdict
-from datetime import datetime
-from typing import Dict, Any, Optional
+from dataclasses import dataclass, asdict, field
+from typing import Dict, Any, Optional, List
 
 
 @dataclass
@@ -9,12 +8,23 @@ class MemoryRecord:
     task_id: str
     task_order: int
     query: str
+
     answer_raw: str
     memory_summary: str
     strategy_note: str
-    created_at: str
+
     task_type: Optional[str] = None
     entity: Optional[str] = None
+    memory_type: str = "fact"
+
+    support_task_ids: List[str] = field(default_factory=list)
+
+    created_at: str = ""
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
+
+    confidence: Optional[float] = None
+    reuse_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
