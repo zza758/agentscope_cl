@@ -29,6 +29,8 @@ def convert_labels_to_tasks(labels):
             "task_id": item["task_id"],
             "task_order": item["task_order"],
             "query": item["query"],
+            "task_type": item.get("task_type"),
+            "entity": item.get("entity"),
             "support_memory_task_ids": item.get("support_memory_task_ids", []),
         })
     tasks.sort(key=lambda x: x["task_order"])

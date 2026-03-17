@@ -136,7 +136,15 @@ def build_runtime(config: dict, experiment_id: str):
     return runner, mysql_logger
 
 
-async def run_setting(base_config: dict, tasks_file: str, experiment_id: str, setting_name: str, output_file: Path):
+async def run_setting(
+    base_config: dict,
+    tasks_file: str,
+    experiment_id: str,
+    setting_name: str,
+    output_file: Path,
+    task_ids=None,
+    max_tasks=None,
+):
     config = deepcopy(base_config)
 
     config["ablation"]["use_memory_policy"] = False
@@ -165,6 +173,13 @@ async def run_setting(base_config: dict, tasks_file: str, experiment_id: str, se
     runner, mysql_logger = build_runtime(config=config, experiment_id=experiment_id)
     tasks = load_tasks(tasks_file)
 
+    if task_ids:
+        allow = {x.strip() for x in task_ids if x.strip()}
+        tasks = [t for t in tasks if t["task_id"] in allow]
+
+    if max_tasks is not None:
+        tasks = tasks[:max_tasks]
+
     output_file.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(output_file, "w", encoding="utf-8") as f:
@@ -174,6 +189,8 @@ async def run_setting(base_config: dict, tasks_file: str, experiment_id: str, se
                     task_order=task["task_order"],
                     query=task["query"],
                     support_task_ids=task.get("support_memory_task_ids", []),
+                    task_type=task.get("task_type"),
+                    task_entity=task.get("entity"),
                 )
                 result["setting_name"] = setting_name
                 f.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -183,6 +200,9 @@ async def run_setting(base_config: dict, tasks_file: str, experiment_id: str, se
 
 async def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--settings", type=str, default=None)
+    parser.add_argument("--task-ids", type=str, default=None)
+    parser.add_argument("--max-tasks", type=int, default=None)
     parser.add_argument("--tasks-file", type=str, required=True)
     parser.add_argument("--experiment-prefix", type=str, required=True)
     parser.add_argument("--output-dir", type=str, default="outputs/eval")

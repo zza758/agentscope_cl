@@ -182,6 +182,7 @@ async def main():
                 task_order=task["task_order"],
                 query=task["query"],
                 support_task_ids=task.get("support_memory_task_ids", []),
+                task_type=task.get("task_type"),
             )
             print(f"[{task['task_id']}]")
             print(result)

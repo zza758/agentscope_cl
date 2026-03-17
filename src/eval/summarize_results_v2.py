@@ -1,5 +1,6 @@
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 
 from src.eval.support_graph import (
@@ -22,7 +23,7 @@ def extract_used_task_ids(used_memories):
     return ids
 
 
-def compute_entity_coverage(task_id, used_ids, label_map, entity_map):
+def compute_entity_coverage(task_id, used_ids, entity_map):
     expected_entities = entity_map.get(task_id, set())
     if not expected_entities:
         return 0, 0
@@ -53,7 +54,21 @@ def main():
     entity_map = build_entity_map(labels)
 
     rows = []
-    for file in sorted(input_dir.glob("*.jsonl")):
+
+    # 只读取正式 setting 文件，避免把 summary.jsonl / summary_v2.jsonl 再次读进去
+    setting_files = [
+        "memory_off_rerank_off.jsonl",
+        "memory_on_rerank_off.jsonl",
+        "memory_on_rerank_on.jsonl",
+        "memory_on_rerank_on_policy_on.jsonl",
+        "memory_on_rerank_on_rl_policy.jsonl",
+    ]
+
+    for name in setting_files:
+        file = input_dir / name
+        if not file.exists():
+            continue
+
         records = load_jsonl(file)
         for r in records:
             task_id = r.get("task_id")
@@ -72,7 +87,6 @@ def main():
             entity_hit, entity_total = compute_entity_coverage(
                 task_id=task_id,
                 used_ids=used_ids,
-                label_map=label_map,
                 entity_map=entity_map,
             )
 
@@ -108,8 +122,6 @@ def main():
 
     print(f"已汇总 {len(rows)} 条结果到: {output_path}")
 
-    # 简单总览
-    from collections import defaultdict
     agg = defaultdict(lambda: {
         "n": 0,
         "used": 0,

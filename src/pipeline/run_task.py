@@ -29,17 +29,17 @@ def extract_text_from_response(response) -> str:
 
 class TaskRunner:
     def __init__(
-        self,
-        agent,
-        memory_manager,
-        mysql_logger,
-        knowledge_base,
-        ablation_cfg,
-        memory_top_k: int = 3,
-        contrastive_cfg: Optional[dict] = None,
-        contrastive_reranker=None,
-        experiment_id: str = "default_exp",
-        memory_policy=None,
+            self,
+            agent,
+            memory_manager,
+            mysql_logger,
+            knowledge_base,
+            ablation_cfg,
+            memory_top_k: int = 3,
+            contrastive_cfg: Optional[dict] = None,
+            contrastive_reranker=None,
+            experiment_id: str = "default_exp",
+            memory_policy=None,
     ):
         self.agent = agent
         self.memory_manager = memory_manager
@@ -52,18 +52,14 @@ class TaskRunner:
         self.experiment_id = experiment_id
         self.memory_policy = memory_policy
 
-    def _retrieve_memories(self, query: str, task_context):
+    def _retrieve_memories(self, query: str, task_context, task_type: str = None):
         if not self.ablation_cfg.get("use_memory", True):
             return []
 
         if self.memory_manager is None:
             return []
 
-        candidate_top_k = self.memory_top_k
-        if self.contrastive_cfg.get("rerank_enabled", False):
-            candidate_top_k = int(
-                self.contrastive_cfg.get("candidate_top_k", self.memory_top_k)
-            )
+        candidate_top_k, final_select_k = self._resolve_memory_budget(task_type)
 
         memory_items = self.memory_manager.retrieve_memory_with_scores(
             query=query,
@@ -77,29 +73,28 @@ class TaskRunner:
                 and self.contrastive_reranker is not None
                 and memory_items
         ):
-            # 只重排，不截断
             memory_items = self.contrastive_reranker.rerank(
                 query=query,
                 candidates=memory_items,
                 top_k=None,
             )
 
-        # 先让 policy 从完整候选池里选
         if self.memory_policy is not None:
+            old_k = getattr(self.memory_policy, "max_select_k", None)
+            if old_k is not None:
+                self.memory_policy.max_select_k = final_select_k
             memory_items = self.memory_policy.select_memories(
                 query=query,
                 task_context=task_context,
                 candidates=memory_items,
             )
+            if old_k is not None:
+                self.memory_policy.max_select_k = old_k
         else:
-            # 没有 policy 时，才按 final_top_k 截断
-            if self.contrastive_cfg.get("rerank_enabled", False):
-                final_top_k = int(self.contrastive_cfg.get("final_top_k", self.memory_top_k))
-                memory_items = memory_items[:final_top_k]
-            else:
-                memory_items = memory_items[: self.memory_top_k]
+            memory_items = memory_items[:final_select_k]
 
         return memory_items
+
     @staticmethod
     def _format_memory_items(memory_items: List[Dict[str, Any]]) -> str:
         if not memory_items:
@@ -127,6 +122,8 @@ class TaskRunner:
             task_order: int,
             query: str,
             support_task_ids=None,
+            task_type: str = None,
+            task_entity: str = None,
     ) -> Dict[str, Any]:
         start_time = time.time()
         task_start_time = datetime.now()
@@ -152,7 +149,11 @@ class TaskRunner:
         elif self.knowledge_base is not None:
             self.knowledge_base.set_runtime_context(None)
 
-        memory_items = self._retrieve_memories(query=query, task_context=task_context)
+        memory_items = self._retrieve_memories(
+            query=query,
+            task_context=task_context,
+            task_type=task_type,
+        )
         memory_texts = [item.get("content", "") for item in memory_items]
         formatted_memories = self._format_memory_items(memory_items)
 
@@ -162,7 +163,8 @@ class TaskRunner:
                 memory_key=f"task:{task_id}:retrieve",
                 operation_type="retrieve",
                 memory_content=formatted_memories,
-                relevance_score=memory_items[0]["score"] if memory_items and memory_items[0].get("score") is not None else None,
+                relevance_score=memory_items[0]["score"] if memory_items and memory_items[0].get(
+                    "score") is not None else None,
             )
 
         user_prompt = (
@@ -253,9 +255,9 @@ class TaskRunner:
             )
 
             if (
-                self.ablation_cfg.get("use_memory", True)
-                and self.ablation_cfg.get("use_memory_write", True)
-                and self.memory_manager is not None
+                    self.ablation_cfg.get("use_memory", True)
+                    and self.ablation_cfg.get("use_memory_write", True)
+                    and self.memory_manager is not None
             ):
                 self.memory_manager.write_memory(memory_record)
         else:
@@ -309,3 +311,12 @@ class TaskRunner:
             "policy_name": self.memory_policy.__class__.__name__ if self.memory_policy else None,
             "policy_selected_memory_ids": [x.get("task_id") for x in memory_items],
         }
+
+    def _resolve_memory_budget(self, task_type: str):
+        if task_type == "comparison":
+            return 6, 6
+        if task_type == "focused_summary":
+            return 6, 4
+        if task_type == "suggestion":
+            return 6, 4
+        return 6, 3
