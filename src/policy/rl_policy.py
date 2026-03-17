@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 
@@ -13,11 +13,13 @@ from src.policy.reward import compute_memory_selection_reward
 class RLMemoryPolicy(BaseMemoryPolicy):
     """
     contextual bandit（LinUCB）版本。
-    不依赖 GPU，可先在线收集和离线更新。
-    这里不再使用任何写死实体/任务类型规则，只使用通用特征。
+    对齐 retrieval v2：
+    - 利用 task_type / entity metadata
+    - 利用 coverage-aware greedy selection
+    - 不做硬编码实体名匹配
     """
 
-    FEATURE_DIM = 9
+    FEATURE_DIM = 11
 
     def __init__(
         self,
@@ -60,36 +62,21 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         return text.strip().lower()
 
     def _tokenize(self, text: str) -> List[str]:
-        """
-        通用轻量分词：
-        - 英文词
-        - 数字
-        - 中文单字
-        """
         text = self._normalize_text(text)
         if not text:
             return []
 
         tokens: List[str] = []
-
-        # 英文词 / 数字
         tokens.extend(re.findall(r"[a-z]+|\d+", text))
-
-        # 中文单字
         tokens.extend(re.findall(r"[\u4e00-\u9fff]", text))
-
         return tokens
 
     def _overlap_ratio(self, query: str, content: str) -> float:
-        q_tokens = self._tokenize(query)
-        c_tokens = self._tokenize(content)
+        q_tokens = set(self._tokenize(query))
+        c_tokens = set(self._tokenize(content))
         if not q_tokens or not c_tokens:
             return 0.0
-
-        q_set = set(q_tokens)
-        c_set = set(c_tokens)
-        overlap = len(q_set & c_set)
-        return overlap / max(len(q_set), 1)
+        return len(q_tokens & c_tokens) / max(len(q_tokens), 1)
 
     def _jaccard(self, query: str, content: str) -> float:
         q_tokens = set(self._tokenize(query))
@@ -100,12 +87,40 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         inter = q_tokens & c_tokens
         return len(inter) / max(len(union), 1)
 
+    def _split_entities(self, entity: Optional[str]) -> List[str]:
+        if not entity:
+            return []
+        return [x for x in entity.split("_") if x]
+
+    def _entity_overlap(self, query_entity: Optional[str], mem_entity: Optional[str]) -> int:
+        q = set(self._split_entities(query_entity))
+        m = set(self._split_entities(mem_entity))
+        return len(q & m)
+
+    def _entity_gain(
+        self,
+        query_entity: Optional[str],
+        covered_entities: Set[str],
+        mem_entity: Optional[str],
+    ) -> int:
+        target = set(self._split_entities(query_entity))
+        mem = set(self._split_entities(mem_entity))
+        if not target or not mem:
+            return 0
+        return len((target - covered_entities) & mem)
+
+    def _same_task_type(self, query_task_type: Optional[str], mem_task_type: Optional[str]) -> float:
+        if not query_task_type or not mem_task_type:
+            return 0.0
+        return 1.0 if query_task_type == mem_task_type else 0.0
+
     def _feature_vector(
         self,
         item: Dict[str, Any],
         rank_idx: int,
         task_context,
         query: str,
+        covered_entities: Optional[Set[str]] = None,
     ) -> np.ndarray:
         base_score = self._safe_float(item.get("score"), 0.0)
         rerank_score = self._safe_float(item.get("contrastive_score"), 0.0)
@@ -126,6 +141,19 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         overlap_ratio = self._overlap_ratio(query, content)
         jaccard = self._jaccard(query, content)
 
+        query_task_type = getattr(task_context, "task_type", None)
+        query_entity = getattr(task_context, "task_entity", None)
+
+        mem_task_type = item.get("task_type")
+        mem_entity = item.get("entity")
+
+        same_task_type = self._same_task_type(query_task_type, mem_task_type)
+        entity_overlap = float(self._entity_overlap(query_entity, mem_entity))
+
+        if covered_entities is None:
+            covered_entities = set()
+        entity_gain = float(self._entity_gain(query_entity, covered_entities, mem_entity))
+
         return np.array([
             base_score,
             rerank_score,
@@ -136,6 +164,8 @@ class RLMemoryPolicy(BaseMemoryPolicy):
             has_rerank,
             overlap_ratio,
             jaccard,
+            same_task_type,
+            entity_overlap + entity_gain,
         ], dtype=np.float64)
 
     def select_memories(
@@ -144,18 +174,50 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         task_context,
         candidates: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        scored = []
-        for idx, item in enumerate(candidates):
-            x = self._feature_vector(item, idx, task_context, query)
-            bandit_score = self.model.score(x)
+        if not candidates:
+            return []
 
-            enriched = dict(item)
-            enriched["policy_score"] = bandit_score
-            enriched["_policy_feature"] = x.tolist()
-            scored.append(enriched)
+        chosen = []
+        remaining = [dict(x) for x in candidates]
+        covered_entities: Set[str] = set()
 
-        scored.sort(key=lambda x: x["policy_score"], reverse=True)
-        return scored[: self.max_select_k]
+        for _ in range(min(self.max_select_k, len(remaining))):
+            scored = []
+            for idx, item in enumerate(remaining):
+                x = self._feature_vector(
+                    item=item,
+                    rank_idx=idx,
+                    task_context=task_context,
+                    query=query,
+                    covered_entities=covered_entities,
+                )
+                bandit_score = self.model.score(x)
+
+                # 轻量 coverage-aware greedy bonus
+                gain = self._entity_gain(
+                    getattr(task_context, "task_entity", None),
+                    covered_entities,
+                    item.get("entity"),
+                )
+                final_score = bandit_score + 0.1 * gain
+
+                enriched = dict(item)
+                enriched["policy_score"] = final_score
+                enriched["_policy_feature"] = x.tolist()
+                scored.append(enriched)
+
+            scored.sort(key=lambda x: x["policy_score"], reverse=True)
+            best = scored[0]
+            chosen.append(best)
+
+            covered_entities.update(self._split_entities(best.get("entity")))
+            best_key = best.get("task_id") or best.get("content")
+            remaining = [
+                x for x in remaining
+                if (x.get("task_id") or x.get("content")) != best_key
+            ]
+
+        return chosen
 
     def should_write_memory(
         self,
@@ -217,6 +279,8 @@ class RLMemoryPolicy(BaseMemoryPolicy):
         log_record = {
             "task_id": task_id or getattr(task_context, "task_id", None),
             "task_order": task_order or getattr(task_context, "task_order", None),
+            "task_type": getattr(task_context, "task_type", None),
+            "task_entity": getattr(task_context, "task_entity", None),
             "query": query,
             "memory_written": memory_written,
             "latency_ms": latency_ms,
@@ -225,6 +289,8 @@ class RLMemoryPolicy(BaseMemoryPolicy):
             "selected_memories": [
                 {
                     "task_id": x.get("task_id"),
+                    "task_type": x.get("task_type"),
+                    "entity": x.get("entity"),
                     "score": x.get("score"),
                     "contrastive_score": x.get("contrastive_score"),
                     "policy_score": x.get("policy_score"),

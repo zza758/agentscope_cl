@@ -9,6 +9,7 @@ from src.runtime.task_context import TaskContext
 from .base_memory import BaseMemoryManager
 from .memory_record import MemoryRecord
 from src.runtime.history_guard import is_legal_history_record
+from src.memory.retrieval_utils import metadata_score, coverage_aware_select
 
 
 def tokenize_zh(text: str) -> List[str]:
@@ -26,11 +27,11 @@ def parse_iso_time(value: Optional[str]) -> Optional[datetime]:
 
 class KeywordMemoryManager(BaseMemoryManager):
     def __init__(
-            self,
-            storage_path: str,
-            default_top_k: int = 3,
-            persistent: bool = True,
-            deduplicate: bool = True,
+        self,
+        storage_path: str,
+        default_top_k: int = 3,
+        persistent: bool = True,
+        deduplicate: bool = True,
     ):
         self.storage_path = Path(storage_path)
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,7 +63,7 @@ class KeywordMemoryManager(BaseMemoryManager):
                     continue
                 record = json.loads(line)
 
-                # 兼容旧格式：如果没有 memory_summary，则退化为 content / answer
+                # 兼容旧格式
                 if "memory_summary" not in record:
                     fallback_summary = record.get("content") or record.get("answer") or ""
                     record["memory_summary"] = fallback_summary
@@ -78,8 +79,10 @@ class KeywordMemoryManager(BaseMemoryManager):
 
                 if "content" not in record:
                     record["content"] = record.get("memory_summary", "")
+
                 if "task_type" not in record:
                     record["task_type"] = None
+
                 if "entity" not in record:
                     record["entity"] = None
 
@@ -101,25 +104,29 @@ class KeywordMemoryManager(BaseMemoryManager):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def retrieve_memory(
-            self,
-            query: str,
-            task_context: TaskContext,
-            top_k: Optional[int] = None,
+        self,
+        query: str,
+        task_context: TaskContext,
+        top_k: Optional[int] = None,
+        task_type: str = None,
+        task_entity: str = None,
     ) -> List[str]:
         items = self.retrieve_memory_with_scores(
             query=query,
             task_context=task_context,
             top_k=top_k,
+            task_type=task_type,
+            task_entity=task_entity,
         )
         return [item["content"] for item in items]
 
     def retrieve_memory_with_scores(
-            self,
-            query: str,
-            task_context: TaskContext,
-            top_k: Optional[int] = None,
-            task_type: str = None,
-            task_entity: str = None,
+        self,
+        query: str,
+        task_context: TaskContext,
+        top_k: Optional[int] = None,
+        task_type: str = None,
+        task_entity: str = None,
     ) -> List[Dict[str, Any]]:
         if top_k is None:
             top_k = self.default_top_k
@@ -133,61 +140,50 @@ class KeywordMemoryManager(BaseMemoryManager):
 
             content = mem.get("memory_summary", mem.get("content", ""))
             overlap = len(query_terms & set(tokenize_zh(content)))
-            if overlap > 0:
-                base_score = float(overlap)
-                same_task_type = 1.0 if task_type and mem.get("task_type") == task_type else 0.0
-                entity_overlap = float(self._entity_overlap(task_entity, mem.get("entity")))
-                final_score = base_score + 0.15 * same_task_type + 0.15 * entity_overlap
+            base_score = float(overlap)
 
-                scored.append(
-                    {
-                        "experiment_id": mem.get("experiment_id"),
-                        "task_id": mem.get("task_id"),
-                        "task_order": mem.get("task_order"),
-                        "query": mem.get("query"),
-                        "content": content,
-                        "score": final_score,
-                        "base_score": base_score,
-                        "task_type": mem.get("task_type"),
-                        "entity": mem.get("entity"),
-                        "created_at": mem.get("created_at"),
-                        "answer_raw": mem.get("answer_raw", ""),
-                        "memory_summary": mem.get("memory_summary", content),
-                        "strategy_note": mem.get("strategy_note", ""),
-                    }
-                )
+            meta_score = metadata_score(
+                task_type=task_type,
+                mem_task_type=mem.get("task_type"),
+                task_entity=task_entity,
+                mem_entity=mem.get("entity"),
+            )
+
+            final_score = base_score + meta_score
+
+            # 允许 metadata 补一点召回，但完全无信号的候选仍过滤掉
+            if base_score <= 0 and meta_score <= 0:
+                continue
+
+            scored.append(
+                {
+                    "experiment_id": mem.get("experiment_id"),
+                    "task_id": mem.get("task_id"),
+                    "task_order": mem.get("task_order"),
+                    "query": mem.get("query"),
+                    "content": content,
+                    "score": final_score,
+                    "base_score": base_score,
+                    "task_type": mem.get("task_type"),
+                    "entity": mem.get("entity"),
+                    "created_at": mem.get("created_at"),
+                    "answer_raw": mem.get("answer_raw", ""),
+                    "memory_summary": mem.get("memory_summary", content),
+                    "strategy_note": mem.get("strategy_note", ""),
+                }
+            )
 
         scored.sort(key=lambda x: x["score"], reverse=True)
 
         deduped = self._deduplicate_scored_items(scored)
         deduped.sort(key=lambda x: x["score"], reverse=True)
 
-        target_entities = self._split_entities(task_entity)
-        if len(target_entities) <= 1:
-            return deduped[:top_k]
-
-        chosen = []
-        chosen_ids = set()
-
-        for ent in target_entities:
-            bucket = [x for x in deduped if ent in self._split_entities(x.get("entity"))]
-            if bucket:
-                best = bucket[0]
-                key = best.get("task_id") or best.get("content")
-                if key not in chosen_ids:
-                    chosen.append(best)
-                    chosen_ids.add(key)
-
-        for item in deduped:
-            if len(chosen) >= top_k:
-                break
-            key = item.get("task_id") or item.get("content")
-            if key in chosen_ids:
-                continue
-            chosen.append(item)
-            chosen_ids.add(key)
-
-        return chosen[:top_k]
+        return coverage_aware_select(
+            candidates=deduped,
+            top_k=top_k,
+            task_entity=task_entity,
+            score_key="score",
+        )
 
     def write_memory(self, record: MemoryRecord) -> None:
         key = self._build_key(record.experiment_id, record.task_id, record.query)
@@ -227,22 +223,10 @@ class KeywordMemoryManager(BaseMemoryManager):
             old_score = float(old_item.get("score", 0.0))
             new_score = float(item.get("score", 0.0))
 
-            old_order = old_item.get("task_order", 10 ** 9)
-            new_order = item.get("task_order", 10 ** 9)
+            old_order = old_item.get("task_order", 10**9)
+            new_order = item.get("task_order", 10**9)
 
             if (new_score > old_score) or (new_score == old_score and new_order < old_order):
                 dedup_map[norm_text] = item
 
         return list(dedup_map.values())
-
-    @staticmethod
-    def _split_entities(entity: Optional[str]) -> List[str]:
-        if not entity:
-            return []
-        return [x for x in entity.split("_") if x]
-
-    @classmethod
-    def _entity_overlap(cls, task_entity: Optional[str], mem_entity: Optional[str]) -> int:
-        q = set(cls._split_entities(task_entity))
-        m = set(cls._split_entities(mem_entity))
-        return len(q & m)

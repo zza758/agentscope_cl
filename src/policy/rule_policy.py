@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set
 
 from src.policy.base_policy import BaseMemoryPolicy
 
@@ -44,6 +44,28 @@ class RuleBasedMemoryPolicy(BaseMemoryPolicy):
             return 0.0
         return len(q & c) / max(len(q), 1)
 
+    def _split_entities(self, entity: str) -> List[str]:
+        if not entity:
+            return []
+        return [x for x in entity.split("_") if x]
+
+    def _entity_overlap(self, query_entity: str, mem_entity: str) -> int:
+        q = set(self._split_entities(query_entity))
+        m = set(self._split_entities(mem_entity))
+        return len(q & m)
+
+    def _entity_gain(self, query_entity: str, covered_entities: Set[str], mem_entity: str) -> int:
+        target = set(self._split_entities(query_entity))
+        mem = set(self._split_entities(mem_entity))
+        if not target or not mem:
+            return 0
+        return len((target - covered_entities) & mem)
+
+    def _same_task_type(self, query_task_type: str, mem_task_type: str) -> float:
+        if not query_task_type or not mem_task_type:
+            return 0.0
+        return 1.0 if query_task_type == mem_task_type else 0.0
+
     def select_memories(
         self,
         query: str,
@@ -53,21 +75,27 @@ class RuleBasedMemoryPolicy(BaseMemoryPolicy):
         if not candidates:
             return []
 
+        query_task_type = getattr(task_context, "task_type", None)
+        query_entity = getattr(task_context, "task_entity", None)
+
         chosen = []
         chosen_ids = set()
+        covered_entities = set()
 
         def add_item(item):
             key = item.get("task_id") or item.get("content")
             if key in chosen_ids:
-                return
+                return False
             chosen.append(item)
             chosen_ids.add(key)
+            covered_entities.update(self._split_entities(item.get("entity", "")))
+            return True
 
-        # 1) 保留 base_score 最高的一条
+        # 1) 先保一个 base_score 最强的
         best_base = max(candidates, key=lambda x: self._safe_float(x.get("score"), 0.0))
         add_item(best_base)
 
-        # 2) 如果有 contrastive_score，保留 rerank 最高的一条
+        # 2) 再保一个 contrastive_score 最强的
         rerank_candidates = [x for x in candidates if x.get("contrastive_score") is not None]
         if rerank_candidates:
             best_rerank = max(
@@ -76,10 +104,16 @@ class RuleBasedMemoryPolicy(BaseMemoryPolicy):
             )
             add_item(best_rerank)
 
-        # 3) 剩余按 query-content overlap 排序补齐
-        remaining = [x for x in candidates if (x.get("task_id") or x.get("content")) not in chosen_ids]
+        # 3) 剩余候选按 coverage-aware 逻辑补齐
+        remaining = [
+            x for x in candidates
+            if (x.get("task_id") or x.get("content")) not in chosen_ids
+        ]
+
         remaining.sort(
             key=lambda x: (
+                self._entity_gain(query_entity, covered_entities, x.get("entity", "")),
+                self._same_task_type(query_task_type, x.get("task_type")),
                 self._overlap_score(query, x.get("content", "")),
                 self._safe_float(x.get("contrastive_score"), -1.0),
                 self._safe_float(x.get("score"), 0.0),

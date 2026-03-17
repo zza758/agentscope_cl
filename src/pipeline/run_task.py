@@ -152,6 +152,9 @@ class TaskRunner:
             task_start_time=task_start_time,
         )
 
+        setattr(task_context, "task_type", task_type)
+        setattr(task_context, "task_entity", task_entity)
+
         if self.knowledge_base is not None and self.ablation_cfg.get("use_knowledge_base", True):
             self.knowledge_base.set_runtime_context(task_run_id)
         elif self.knowledge_base is not None:
