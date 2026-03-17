@@ -1,6 +1,6 @@
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 @dataclass
@@ -13,6 +13,8 @@ class MemoryRecord:
     memory_summary: str
     strategy_note: str
     created_at: str
+    task_type: Optional[str] = None
+    entity: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -23,6 +25,8 @@ class MemoryRecord:
     def to_log_text(self) -> str:
         return (
             f"任务: {self.query}\n"
+            f"任务类型: {self.task_type}\n"
+            f"实体: {self.entity}\n"
             f"原始答案: {self.answer_raw}\n"
             f"记忆摘要: {self.memory_summary}\n"
             f"策略备注: {self.strategy_note}"

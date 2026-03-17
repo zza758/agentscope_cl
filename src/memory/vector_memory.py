@@ -77,6 +77,10 @@ class VectorMemoryManager(BaseMemoryManager):
 
                 if "content" not in record:
                     record["content"] = record.get("memory_summary", "")
+                if "task_type" not in record:
+                    record["task_type"] = None
+                if "entity" not in record:
+                    record["entity"] = None
 
                 self._memory_bank.append(record)
                 self._memory_keys.add(
@@ -108,6 +112,8 @@ class VectorMemoryManager(BaseMemoryManager):
         query: str,
         task_context: TaskContext,
         top_k: Optional[int] = None,
+        task_type: str = None,
+        task_entity: str = None,
     ) -> List[str]:
         items = self.retrieve_memory_with_scores(
             query=query,
@@ -121,6 +127,8 @@ class VectorMemoryManager(BaseMemoryManager):
         query: str,
         task_context: TaskContext,
         top_k: Optional[int] = None,
+        task_type: str = None,
+        task_entity: str = None,
     ) -> List[Dict[str, Any]]:
         if top_k is None:
             top_k = self.default_top_k
@@ -140,7 +148,10 @@ class VectorMemoryManager(BaseMemoryManager):
                 continue
 
             content = mem.get("memory_summary", mem.get("content", ""))
-            score = self._cosine_similarity(query_vec, emb)
+            base_score = self._cosine_similarity(query_vec, emb)
+            same_task_type = 1.0 if task_type and mem.get("task_type") == task_type else 0.0
+            entity_overlap = float(self._entity_overlap(task_entity, mem.get("entity")))
+            score = base_score + 0.15 * same_task_type + 0.15 * entity_overlap
 
             scored.append(
                 {
@@ -154,6 +165,9 @@ class VectorMemoryManager(BaseMemoryManager):
                     "content": content,  # rerank / agent 统一使用 content 作为检索主文本
                     "score": score,
                     "created_at": mem.get("created_at"),
+                    "base_score": base_score,
+                    "task_type": mem.get("task_type"),
+                    "entity": mem.get("entity"),
                 }
             )
 
@@ -163,7 +177,32 @@ class VectorMemoryManager(BaseMemoryManager):
         deduped = self._deduplicate_scored_items(scored)
         deduped.sort(key=lambda x: x["score"], reverse=True)
 
-        return deduped[:top_k]
+        target_entities = self._split_entities(task_entity)
+        if len(target_entities) <= 1:
+            return deduped[:top_k]
+
+        chosen = []
+        chosen_ids = set()
+
+        for ent in target_entities:
+            bucket = [x for x in deduped if ent in self._split_entities(x.get("entity"))]
+            if bucket:
+                best = bucket[0]
+                key = best.get("task_id") or best.get("content")
+                if key not in chosen_ids:
+                    chosen.append(best)
+                    chosen_ids.add(key)
+
+        for item in deduped:
+            if len(chosen) >= top_k:
+                break
+            key = item.get("task_id") or item.get("content")
+            if key in chosen_ids:
+                continue
+            chosen.append(item)
+            chosen_ids.add(key)
+
+        return chosen[:top_k]
 
 
     def write_memory(self, record: MemoryRecord) -> None:
@@ -223,3 +262,14 @@ class VectorMemoryManager(BaseMemoryManager):
 
         return list(dedup_map.values())
 
+    @staticmethod
+    def _split_entities(entity: Optional[str]) -> List[str]:
+        if not entity:
+            return []
+        return [x for x in entity.split("_") if x]
+
+    @classmethod
+    def _entity_overlap(cls, task_entity: Optional[str], mem_entity: Optional[str]) -> int:
+        q = set(cls._split_entities(task_entity))
+        m = set(cls._split_entities(mem_entity))
+        return len(q & m)

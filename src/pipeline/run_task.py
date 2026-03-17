@@ -52,7 +52,13 @@ class TaskRunner:
         self.experiment_id = experiment_id
         self.memory_policy = memory_policy
 
-    def _retrieve_memories(self, query: str, task_context, task_type: str = None):
+    def _retrieve_memories(
+            self,
+            query: str,
+            task_context,
+            task_type: str = None,
+            task_entity: str = None
+    ):
         if not self.ablation_cfg.get("use_memory", True):
             return []
 
@@ -65,6 +71,8 @@ class TaskRunner:
             query=query,
             task_context=task_context,
             top_k=candidate_top_k,
+            task_type=task_type,
+            task_entity=task_entity,
         )
 
         if (
@@ -153,6 +161,7 @@ class TaskRunner:
             query=query,
             task_context=task_context,
             task_type=task_type,
+            task_entity=task_entity,
         )
         memory_texts = [item.get("content", "") for item in memory_items]
         formatted_memories = self._format_memory_items(memory_items)
@@ -244,6 +253,8 @@ class TaskRunner:
                 memory_summary=write_payload["memory_summary"],
                 strategy_note=write_payload["strategy_note"],
                 created_at=MemoryRecord.now_ts(),
+                task_type=task_type,
+                entity=task_entity,
             )
 
             self.mysql_logger.log_memory(
@@ -314,9 +325,9 @@ class TaskRunner:
 
     def _resolve_memory_budget(self, task_type: str):
         if task_type == "comparison":
-            return 6, 6
+            return 12, 6
         if task_type == "focused_summary":
-            return 6, 4
+            return 8, 4
         if task_type == "suggestion":
-            return 6, 4
+            return 8, 4
         return 6, 3
