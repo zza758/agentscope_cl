@@ -40,6 +40,8 @@ class TaskRunner:
         contrastive_reranker=None,
         memory_policy=None,
         experiment_id: str = "default_exp",
+        enable_profile: bool = False,
+        enable_kb_runtime_context: bool = True,
     ):
         self.agent = agent
         self.memory_manager = memory_manager
@@ -51,8 +53,16 @@ class TaskRunner:
         self.contrastive_reranker = contrastive_reranker
         self.memory_policy = memory_policy
         self.experiment_id = experiment_id
+        self.enable_profile = enable_profile
+        self.enable_kb_runtime_context = enable_kb_runtime_context
 
-    def _retrieve_memories(self, query: str, task_context: TaskContext) -> List[Dict[str, Any]]:
+    def _retrieve_memories(
+        self,
+        query: str,
+        task_context: TaskContext,
+        task_type: Optional[str] = None,
+        task_entity: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         if not self.ablation_cfg.get("use_memory", True):
             return []
         if self.memory_manager is None:
@@ -68,6 +78,8 @@ class TaskRunner:
             query=query,
             task_context=task_context,
             top_k=candidate_top_k,
+            task_type=task_type,
+            task_entity=task_entity,
         )
 
         if (
@@ -125,6 +137,25 @@ class TaskRunner:
 
         return "\n".join(lines)
 
+    def _maybe_log_profile(
+        self,
+        task_run_id: int,
+        task_id: str,
+        task_order: int,
+        stream_id: Optional[str],
+        profile: Dict[str, Any],
+    ) -> None:
+        if not self.enable_profile:
+            return
+        if hasattr(self.mysql_logger, "log_profile"):
+            self.mysql_logger.log_profile(
+                task_run_id=task_run_id,
+                task_id=task_id,
+                task_order=task_order,
+                stream_id=stream_id,
+                profile=profile,
+            )
+
     async def run_single_task(
         self,
         task: Optional[Dict[str, Any]] = None,
@@ -155,7 +186,7 @@ class TaskRunner:
         support_task_ids = support_task_ids or []
         meta = meta or {}
 
-        start_time = time.time()
+        wall_start = time.perf_counter()
         task_start_time = datetime.now()
 
         task_run_id = self.mysql_logger.log_task_run(
@@ -181,12 +212,24 @@ class TaskRunner:
             meta=meta,
         )
 
-        if self.knowledge_base is not None and self.ablation_cfg.get("use_knowledge_base", True):
+        if (
+            self.knowledge_base is not None
+            and self.ablation_cfg.get("use_knowledge_base", True)
+            and self.enable_kb_runtime_context
+        ):
             self.knowledge_base.set_runtime_context(task_run_id)
         elif self.knowledge_base is not None:
             self.knowledge_base.set_runtime_context(None)
 
-        memory_items = self._retrieve_memories(query=query, task_context=task_context)
+        t_retrieve_start = time.perf_counter()
+        memory_items = self._retrieve_memories(
+            query=query,
+            task_context=task_context,
+            task_type=task_type,
+            task_entity=entity,
+        )
+        t_retrieve_end = time.perf_counter()
+
         memories = [item.get("content", "") for item in memory_items]
         formatted_memories = self._format_memory_items(memory_items)
 
@@ -212,22 +255,28 @@ class TaskRunner:
             metadata_lines.append(f"- source_dataset: {source_dataset}")
         task_meta_block = "\n".join(metadata_lines) if metadata_lines else "- 无"
 
+        if task_type == "decomposition_qa":
+            task_instruction = (
+                "这是一个分解子问题。优先直接给出简洁、明确的事实答案；"
+                "仅在确有必要时调用知识检索工具。"
+            )
+        else:
+            task_instruction = (
+                "必要时调用知识检索工具，并结合历史经验完成当前任务。"
+            )
+
         user_prompt = (
             f"当前任务:\n{query}\n\n"
-            f"当前任务元数据:\n{task_meta_block}\n\n"
-            f"可参考的历史经验:\n{formatted_memories}\n\n"
-            f"请先判断是否需要调用知识检索工具，再完成任务。\n"
-            f"最终输出请严格使用以下格式：\n\n"
-            f"〖最终答案〗\n"
-            f"写给用户看的最终回答。\n\n"
-            f"〖记忆摘要〗\n"
-            f"提炼出适合长期记忆检索的一段摘要。要求：\n"
-            f"1. 只保留以后可复用的知识结论；\n"
-            f"2. 不要写“无需检索”“根据历史经验”等过程性话语；\n"
-            f"3. 尽量简洁、信息完整。\n\n"
-            f"〖策略备注〗\n"
-            f"简要说明这次任务处理策略，可用于后续策略学习。\n"
+            f"任务元数据:\n{task_meta_block}\n\n"
+            f"历史经验:\n{formatted_memories}\n\n"
+            f"{task_instruction}\n\n"
+            f"请严格按以下格式输出：\n"
+            f"〖最终答案〗不超过3句。\n"
+            f"〖记忆摘要〗不超过80字，只保留以后可复用的结论。\n"
+            f"〖策略备注〗1句话。\n"
         )
+
+        t_compose_end = time.perf_counter()
 
         self.mysql_logger.log_trajectory(
             task_run_id=task_run_id,
@@ -246,7 +295,11 @@ class TaskRunner:
         )
 
         msg = Msg(name="user", content=user_prompt, role="user")
+
+        t_agent_start = time.perf_counter()
         response = await self.agent(msg)
+        t_agent_end = time.perf_counter()
+
         raw_answer = extract_text_from_response(response)
         parsed = parse_structured_answer(raw_answer)
 
@@ -297,6 +350,7 @@ class TaskRunner:
                 strategy_note=strategy_note,
             )
 
+        t_memory_write_start = time.perf_counter()
         memory_written = False
         if (
             should_write
@@ -313,8 +367,9 @@ class TaskRunner:
                 memory_content=memory_record.to_log_text(),
                 relevance_score=None,
             )
+        t_memory_write_end = time.perf_counter()
 
-        latency_ms = int((time.time() - start_time) * 1000)
+        latency_ms = int((time.perf_counter() - wall_start) * 1000)
 
         policy_result = None
         if self.memory_policy is not None:
@@ -344,6 +399,23 @@ class TaskRunner:
         if self.knowledge_base is not None:
             self.knowledge_base.set_runtime_context(None)
 
+        profile = {
+            "retrieve_ms": round((t_retrieve_end - t_retrieve_start) * 1000, 3),
+            "compose_ms": round((t_compose_end - t_retrieve_end) * 1000, 3),
+            "agent_ms": round((t_agent_end - t_agent_start) * 1000, 3),
+            "memory_write_ms": round((t_memory_write_end - t_memory_write_start) * 1000, 3),
+            "total_ms": latency_ms,
+            "memory_candidates": len(memory_items),
+            "memory_written": memory_written,
+        }
+        self._maybe_log_profile(
+            task_run_id=task_run_id,
+            task_id=task_id,
+            task_order=task_order,
+            stream_id=stream_id,
+            profile=profile,
+        )
+
         return {
             "task_run_id": task_run_id,
             "task_id": task_id,
@@ -359,4 +431,5 @@ class TaskRunner:
             "latency_ms": latency_ms,
             "used_memories": memories,
             "policy_result": policy_result,
+            "profile": profile,
         }

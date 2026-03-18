@@ -46,7 +46,10 @@ class ContrastiveEncoderInfer:
         self.max_length = max_length
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_dir, fix_mistral_regex=True)
+        except TypeError:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
         self.model = ContrastiveEncoder(model_dir).to(self.device)
         self.model.eval()
 

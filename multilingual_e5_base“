@@ -1,0 +1,3 @@
+[main c2b2ff7] bert_base_chinese
+ 4 files changed, 43 insertions(+), 26 deletions(-)
+ create mode 100644 "multilingual-e5-base\342\200\234"

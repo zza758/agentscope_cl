@@ -147,7 +147,10 @@ def train():
     print(f"读取训练样本数: {len(records)}")
 
     model_name_or_path = contrastive_cfg["model_name_or_path"]
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, fix_mistral_regex=True)
+    except TypeError:
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     model = ContrastiveEncoder(model_name_or_path)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
