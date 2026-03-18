@@ -1,11 +1,11 @@
 import time
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from agentscope.message import Msg
 
-from src.runtime.task_context import TaskContext
 from src.memory.memory_record import MemoryRecord
+from src.runtime.task_context import TaskContext
 from src.utils.structured_answer import parse_structured_answer
 
 
@@ -29,17 +29,17 @@ def extract_text_from_response(response) -> str:
 
 class TaskRunner:
     def __init__(
-            self,
-            agent,
-            memory_manager,
-            mysql_logger,
-            knowledge_base,
-            ablation_cfg,
-            memory_top_k: int = 3,
-            contrastive_cfg: Optional[dict] = None,
-            contrastive_reranker=None,
-            experiment_id: str = "default_exp",
-            memory_policy=None,
+        self,
+        agent,
+        memory_manager,
+        mysql_logger,
+        knowledge_base,
+        ablation_cfg,
+        memory_top_k: int = 3,
+        contrastive_cfg: dict = None,
+        contrastive_reranker=None,
+        memory_policy=None,
+        experiment_id: str = "default_exp",
     ):
         self.agent = agent
         self.memory_manager = memory_manager
@@ -49,57 +49,50 @@ class TaskRunner:
         self.memory_top_k = memory_top_k
         self.contrastive_cfg = contrastive_cfg or {}
         self.contrastive_reranker = contrastive_reranker
-        self.experiment_id = experiment_id
         self.memory_policy = memory_policy
+        self.experiment_id = experiment_id
 
-    def _retrieve_memories(
-            self,
-            query: str,
-            task_context,
-            task_type: str = None,
-            task_entity: str = None
-    ):
+    def _retrieve_memories(self, query: str, task_context: TaskContext) -> List[Dict[str, Any]]:
         if not self.ablation_cfg.get("use_memory", True):
             return []
-
         if self.memory_manager is None:
             return []
 
-        candidate_top_k, final_select_k = self._resolve_memory_budget(task_type)
+        candidate_top_k = self.memory_top_k
+        if self.contrastive_cfg.get("rerank_enabled", False):
+            candidate_top_k = int(
+                self.contrastive_cfg.get("candidate_top_k", self.memory_top_k)
+            )
 
         memory_items = self.memory_manager.retrieve_memory_with_scores(
             query=query,
             task_context=task_context,
             top_k=candidate_top_k,
-            task_type=task_type,
-            task_entity=task_entity,
         )
 
         if (
-                self.ablation_cfg.get("use_contrastive_rerank", False)
-                and self.contrastive_cfg.get("rerank_enabled", False)
-                and self.contrastive_reranker is not None
-                and memory_items
+            self.ablation_cfg.get("use_contrastive_rerank", False)
+            and self.contrastive_cfg.get("rerank_enabled", False)
+            and self.contrastive_reranker is not None
+            and memory_items
         ):
+            rerank_top_k = None if self.memory_policy is not None else int(
+                self.contrastive_cfg.get("final_top_k", self.memory_top_k)
+            )
             memory_items = self.contrastive_reranker.rerank(
                 query=query,
                 candidates=memory_items,
-                top_k=None,
+                top_k=rerank_top_k,
             )
 
-        if self.memory_policy is not None:
-            old_k = getattr(self.memory_policy, "max_select_k", None)
-            if old_k is not None:
-                self.memory_policy.max_select_k = final_select_k
+        if self.memory_policy is not None and memory_items:
             memory_items = self.memory_policy.select_memories(
                 query=query,
                 task_context=task_context,
                 candidates=memory_items,
             )
-            if old_k is not None:
-                self.memory_policy.max_select_k = old_k
         else:
-            memory_items = memory_items[:final_select_k]
+            memory_items = memory_items[: self.memory_top_k]
 
         return memory_items
 
@@ -112,27 +105,56 @@ class TaskRunner:
         for idx, item in enumerate(memory_items, start=1):
             base_score = item.get("score")
             rerank_score = item.get("contrastive_score")
-
+            policy_score = item.get("policy_score")
             parts = [f"[历史经验{idx}"]
             if base_score is not None:
                 parts.append(f"base={base_score:.4f}")
             if rerank_score is not None:
                 parts.append(f"rerank={rerank_score:.4f}")
+            if policy_score is not None:
+                parts.append(f"policy={policy_score:.4f}")
             prefix = "|".join(parts) + "]"
 
-            lines.append(f"{prefix} {item.get('content', '')}")
+            meta = []
+            if item.get("task_type"):
+                meta.append(f"task_type={item['task_type']}")
+            if item.get("entity"):
+                meta.append(f"entity={item['entity']}")
+            meta_text = f" ({'; '.join(meta)})" if meta else ""
+            lines.append(f"{prefix}{meta_text} {item.get('content', '')}")
 
         return "\n".join(lines)
 
     async def run_single_task(
-            self,
-            task_id: str,
-            task_order: int,
-            query: str,
-            support_task_ids=None,
-            task_type: str = None,
-            task_entity: str = None,
+        self,
+        task: Optional[Dict[str, Any]] = None,
+        *,
+        task_id: Optional[str] = None,
+        task_order: Optional[int] = None,
+        query: Optional[str] = None,
+        stream_id: Optional[str] = None,
+        task_type: Optional[str] = None,
+        entity: Optional[str] = None,
+        support_task_ids: Optional[List[str]] = None,
+        source_dataset: Optional[str] = None,
+        source_sample_id: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        if task is not None:
+            task_id = task["task_id"]
+            task_order = int(task["task_order"])
+            query = task["query"]
+            stream_id = task.get("stream_id")
+            task_type = task.get("task_type")
+            entity = task.get("entity")
+            support_task_ids = task.get("support_task_ids") or []
+            source_dataset = task.get("source_dataset")
+            source_sample_id = task.get("source_sample_id")
+            meta = task.get("meta") or {}
+
+        support_task_ids = support_task_ids or []
+        meta = meta or {}
+
         start_time = time.time()
         task_start_time = datetime.now()
 
@@ -150,23 +172,22 @@ class TaskRunner:
             task_order=task_order,
             task_run_id=task_run_id,
             task_start_time=task_start_time,
+            stream_id=stream_id,
+            task_type=task_type,
+            task_entity=entity,
+            support_task_ids=support_task_ids,
+            source_dataset=source_dataset,
+            source_sample_id=source_sample_id,
+            meta=meta,
         )
-
-        setattr(task_context, "task_type", task_type)
-        setattr(task_context, "task_entity", task_entity)
 
         if self.knowledge_base is not None and self.ablation_cfg.get("use_knowledge_base", True):
             self.knowledge_base.set_runtime_context(task_run_id)
         elif self.knowledge_base is not None:
             self.knowledge_base.set_runtime_context(None)
 
-        memory_items = self._retrieve_memories(
-            query=query,
-            task_context=task_context,
-            task_type=task_type,
-            task_entity=task_entity,
-        )
-        memory_texts = [item.get("content", "") for item in memory_items]
+        memory_items = self._retrieve_memories(query=query, task_context=task_context)
+        memories = [item.get("content", "") for item in memory_items]
         formatted_memories = self._format_memory_items(memory_items)
 
         if self.ablation_cfg.get("use_memory_logging", True):
@@ -175,12 +196,25 @@ class TaskRunner:
                 memory_key=f"task:{task_id}:retrieve",
                 operation_type="retrieve",
                 memory_content=formatted_memories,
-                relevance_score=memory_items[0]["score"] if memory_items and memory_items[0].get(
-                    "score") is not None else None,
+                relevance_score=memory_items[0]["score"] if memory_items else None,
             )
+
+        metadata_lines = []
+        if stream_id:
+            metadata_lines.append(f"- stream_id: {stream_id}")
+        if task_type:
+            metadata_lines.append(f"- task_type: {task_type}")
+        if entity:
+            metadata_lines.append(f"- entity: {entity}")
+        if support_task_ids:
+            metadata_lines.append(f"- support_task_ids: {support_task_ids}")
+        if source_dataset:
+            metadata_lines.append(f"- source_dataset: {source_dataset}")
+        task_meta_block = "\n".join(metadata_lines) if metadata_lines else "- 无"
 
         user_prompt = (
             f"当前任务:\n{query}\n\n"
+            f"当前任务元数据:\n{task_meta_block}\n\n"
             f"可参考的历史经验:\n{formatted_memories}\n\n"
             f"请先判断是否需要调用知识检索工具，再完成任务。\n"
             f"最终输出请严格使用以下格式：\n\n"
@@ -200,15 +234,22 @@ class TaskRunner:
             step_no=1,
             agent_name="MainAgent",
             action_type="compose_input",
-            action_input={"query": query, "memories": memory_texts},
+            action_input={
+                "query": query,
+                "stream_id": stream_id,
+                "task_type": task_type,
+                "entity": entity,
+                "support_task_ids": support_task_ids,
+                "memories": memories,
+            },
             action_output=user_prompt,
         )
 
         msg = Msg(name="user", content=user_prompt, role="user")
         response = await self.agent(msg)
         raw_answer = extract_text_from_response(response)
-
         parsed = parse_structured_answer(raw_answer)
+
         final_answer = parsed["final_answer"].strip()
         memory_summary = parsed["memory_summary"].strip()
         strategy_note = parsed["strategy_note"].strip()
@@ -220,11 +261,31 @@ class TaskRunner:
         if not strategy_note:
             strategy_note = "可作为后续相似任务的参考经验。"
 
-        write_payload = {
-            "answer_raw": final_answer,
-            "memory_summary": memory_summary,
-            "strategy_note": strategy_note,
-        }
+        memory_record = MemoryRecord(
+            experiment_id=self.experiment_id,
+            task_id=task_id,
+            task_order=task_order,
+            query=query,
+            answer_raw=final_answer,
+            memory_summary=memory_summary,
+            strategy_note=strategy_note,
+            created_at=MemoryRecord.now_ts(),
+            stream_id=stream_id,
+            task_type=task_type,
+            entity=entity,
+            support_task_ids=support_task_ids,
+            source_dataset=source_dataset,
+            source_sample_id=source_sample_id,
+            meta=meta,
+        )
+
+        self.mysql_logger.log_memory(
+            task_run_id=task_run_id,
+            memory_key=f"task:{task_id}:write_candidate",
+            operation_type="write_candidate",
+            memory_content=memory_record.to_log_text(),
+            relevance_score=None,
+        )
 
         should_write = True
         if self.memory_policy is not None:
@@ -235,33 +296,16 @@ class TaskRunner:
                 memory_summary=memory_summary,
                 strategy_note=strategy_note,
             )
-            if should_write:
-                custom_payload = self.memory_policy.build_write_record(
-                    query=query,
-                    task_context=task_context,
-                    final_answer=final_answer,
-                    memory_summary=memory_summary,
-                    strategy_note=strategy_note,
-                )
-                if custom_payload:
-                    write_payload = custom_payload
 
-        if should_write:
-            memory_record = MemoryRecord(
-                experiment_id=self.experiment_id,
-                task_id=task_id,
-                task_order=task_order,
-                query=query,
-                answer_raw=final_answer,
-                memory_summary=memory_summary,
-                strategy_note=strategy_note,
-                task_type=task_type,
-                entity=task_entity,
-                support_task_ids=support_task_ids or [],
-                created_at=MemoryRecord.now_ts(),
-                valid_from=task_start_time.strftime("%Y-%m-%d %H:%M:%S"),
-            )
-
+        memory_written = False
+        if (
+            should_write
+            and self.ablation_cfg.get("use_memory", True)
+            and self.ablation_cfg.get("use_memory_write", True)
+            and self.memory_manager is not None
+        ):
+            self.memory_manager.write_memory(memory_record)
+            memory_written = True
             self.mysql_logger.log_memory(
                 task_run_id=task_run_id,
                 memory_key=f"task:{task_id}:write",
@@ -270,67 +314,29 @@ class TaskRunner:
                 relevance_score=None,
             )
 
-            memory_written = True
-            if self.memory_policy is not None:
-                memory_written = self.memory_policy.should_write_memory(
-                    query=query,
-                    task_context=task_context,
-                    final_answer=final_answer,
-                    memory_summary=memory_summary,
-                    strategy_note=strategy_note,
-                )
+        latency_ms = int((time.time() - start_time) * 1000)
 
-            policy_feedback = None
-            latency_ms = int((time.time() - start_time) * 1000)
-            if self.memory_policy is not None:
-                policy_feedback = self.memory_policy.on_task_end(
-                    query=query,
-                    task_context=task_context,
-                    selected_memories=memory_items,
-                    final_answer=final_answer,
-                    memory_summary=memory_summary,
-                    strategy_note=strategy_note,
-                    memory_written=memory_written,
-                    latency_ms=latency_ms,
-                    task_id=task_id,
-                    task_order=task_order,
-                    support_task_ids=support_task_ids or [],
-                )
-
-            reward_score = None
-            if isinstance(policy_feedback, dict):
-                reward_score = policy_feedback.get("reward")
-
-            if (
-                    memory_written
-                    and self.ablation_cfg.get("use_memory", True)
-                    and self.ablation_cfg.get("use_memory_write", True)
-                    and self.memory_manager is not None
-            ):
-                self.memory_manager.write_memory(memory_record)
-            else:
-                self.mysql_logger.log_memory(
-                    task_run_id=task_run_id,
-                    memory_key=f"task:{task_id}:skip_write",
-                    operation_type="skip_write",
-                    memory_content=memory_record.to_log_text(),
-                    relevance_score=None,
-                )
-
-        else:
-            self.mysql_logger.log_memory(
-                task_run_id=task_run_id,
-                memory_key=f"task:{task_id}:write_skip",
-                operation_type="write_skip",
-                memory_content=memory_summary,
-                relevance_score=None,
+        policy_result = None
+        if self.memory_policy is not None:
+            policy_result = self.memory_policy.on_task_end(
+                query=query,
+                task_context=task_context,
+                selected_memories=memory_items,
+                final_answer=final_answer,
+                memory_summary=memory_summary,
+                strategy_note=strategy_note,
+                memory_written=memory_written,
+                latency_ms=latency_ms,
+                task_id=task_id,
+                task_order=task_order,
+                support_task_ids=support_task_ids,
             )
 
         self.mysql_logger.update_task_result(
             task_run_id=task_run_id,
             final_answer=final_answer,
             success_flag=1,
-            reward_score=reward_score,
+            reward_score=policy_result.get("reward") if isinstance(policy_result, dict) else None,
             token_cost=None,
             latency_ms=latency_ms,
         )
@@ -338,40 +344,19 @@ class TaskRunner:
         if self.knowledge_base is not None:
             self.knowledge_base.set_runtime_context(None)
 
-        if self.memory_policy is not None:
-            self.memory_policy.on_task_end(
-                query=query,
-                task_context=task_context,
-                selected_memories=memory_items,
-                final_answer=final_answer,
-                memory_summary=memory_summary,
-                strategy_note=strategy_note,
-                memory_written=should_write,
-                latency_ms=latency_ms,
-                task_id=task_id,
-                task_order=task_order,
-                support_task_ids=support_task_ids,
-            )
-
         return {
             "task_run_id": task_run_id,
             "task_id": task_id,
+            "task_order": task_order,
+            "stream_id": stream_id,
+            "task_type": task_type,
+            "entity": entity,
+            "support_task_ids": support_task_ids,
             "query": query,
             "final_answer": final_answer,
             "memory_summary": memory_summary,
             "strategy_note": strategy_note,
             "latency_ms": latency_ms,
-            "used_memories": memory_items,
-            "memory_written": should_write,
-            "policy_name": self.memory_policy.__class__.__name__ if self.memory_policy else None,
-            "policy_selected_memory_ids": [x.get("task_id") for x in memory_items],
+            "used_memories": memories,
+            "policy_result": policy_result,
         }
-
-    def _resolve_memory_budget(self, task_type: str):
-        if task_type == "comparison":
-            return 12, 6
-        if task_type == "focused_summary":
-            return 8, 4
-        if task_type == "suggestion":
-            return 8, 4
-        return 6, 3

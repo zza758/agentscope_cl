@@ -1,9 +1,8 @@
 import json
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-
-import jieba
 
 from src.runtime.task_context import TaskContext
 from .base_memory import BaseMemoryManager
@@ -12,8 +11,20 @@ from src.runtime.history_guard import is_legal_history_record
 from src.memory.retrieval_utils import metadata_score, coverage_aware_select
 
 
-def tokenize_zh(text: str) -> List[str]:
-    return [w.strip() for w in jieba.lcut(text) if w.strip()]
+def tokenize_text(text: str) -> List[str]:
+    """
+    轻量 tokenizer：
+    - 英文/数字/下划线：按连续 token 切分
+    - 中文：按单字切分
+    目的不是做高质量中文分词，而是提供一个稳定、零额外依赖的 keyword 检索基线。
+    对 HotpotQA / MuSiQue 这类英文 benchmark 已足够用于 smoke test。
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    tokens = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]", text)
+    return [t.strip().lower() for t in tokens if t.strip()]
 
 
 def parse_iso_time(value: Optional[str]) -> Optional[datetime]:
@@ -35,19 +46,23 @@ class KeywordMemoryManager(BaseMemoryManager):
     ):
         self.storage_path = Path(storage_path)
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-
         self.default_top_k = default_top_k
         self.persistent = persistent
         self.deduplicate = deduplicate
-
         self._memory_bank: List[Dict[str, Any]] = []
         self._memory_keys = set()
 
         if self.persistent:
             self._load_memories()
 
-    def _build_key(self, experiment_id: str, task_id: str, query: str) -> str:
-        return f"{experiment_id}::{task_id}::{query.strip()}"
+    def _build_key(
+        self,
+        experiment_id: str,
+        task_id: str,
+        query: str,
+        stream_id: str = "",
+    ) -> str:
+        return f"{experiment_id}::{stream_id}::{task_id}::{query.strip()}"
 
     def _load_memories(self) -> None:
         self._memory_bank = []
@@ -61,6 +76,7 @@ class KeywordMemoryManager(BaseMemoryManager):
                 line = line.strip()
                 if not line:
                     continue
+
                 record = json.loads(line)
 
                 # 兼容旧格式
@@ -80,19 +96,22 @@ class KeywordMemoryManager(BaseMemoryManager):
                 if "content" not in record:
                     record["content"] = record.get("memory_summary", "")
 
-                if "task_type" not in record:
-                    record["task_type"] = None
-
-                if "entity" not in record:
-                    record["entity"] = None
+                # structured / benchmark 默认字段
+                record.setdefault("stream_id", None)
+                record.setdefault("task_type", None)
+                record.setdefault("entity", None)
+                record.setdefault("support_task_ids", [])
+                record.setdefault("source_dataset", None)
+                record.setdefault("source_sample_id", None)
+                record.setdefault("meta", {})
 
                 self._memory_bank.append(record)
-
                 self._memory_keys.add(
                     self._build_key(
                         record.get("experiment_id", ""),
                         record.get("task_id", ""),
                         record.get("query", ""),
+                        record.get("stream_id", "") or "",
                     )
                 )
 
@@ -131,7 +150,7 @@ class KeywordMemoryManager(BaseMemoryManager):
         if top_k is None:
             top_k = self.default_top_k
 
-        query_terms = set(tokenize_zh(query))
+        query_terms = set(tokenize_text(query))
         scored = []
 
         for mem in self._memory_bank:
@@ -139,7 +158,9 @@ class KeywordMemoryManager(BaseMemoryManager):
                 continue
 
             content = mem.get("memory_summary", mem.get("content", ""))
-            overlap = len(query_terms & set(tokenize_zh(content)))
+            mem_terms = set(tokenize_text(content))
+
+            overlap = len(query_terms & mem_terms)
             base_score = float(overlap)
 
             meta_score = metadata_score(
@@ -151,30 +172,35 @@ class KeywordMemoryManager(BaseMemoryManager):
 
             final_score = base_score + meta_score
 
-            # 允许 metadata 补一点召回，但完全无信号的候选仍过滤掉
+            # 完全无内容信号且无元数据信号，不保留
             if base_score <= 0 and meta_score <= 0:
                 continue
 
             scored.append(
                 {
                     "experiment_id": mem.get("experiment_id"),
+                    "stream_id": mem.get("stream_id"),
                     "task_id": mem.get("task_id"),
                     "task_order": mem.get("task_order"),
                     "query": mem.get("query"),
                     "content": content,
                     "score": final_score,
                     "base_score": base_score,
-                    "task_type": mem.get("task_type"),
-                    "entity": mem.get("entity"),
+                    "meta_score": meta_score,
                     "created_at": mem.get("created_at"),
                     "answer_raw": mem.get("answer_raw", ""),
                     "memory_summary": mem.get("memory_summary", content),
                     "strategy_note": mem.get("strategy_note", ""),
+                    "task_type": mem.get("task_type"),
+                    "entity": mem.get("entity"),
+                    "support_task_ids": mem.get("support_task_ids", []),
+                    "source_dataset": mem.get("source_dataset"),
+                    "source_sample_id": mem.get("source_sample_id"),
+                    "meta": mem.get("meta", {}),
                 }
             )
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-
         deduped = self._deduplicate_scored_items(scored)
         deduped.sort(key=lambda x: x["score"], reverse=True)
 
@@ -186,7 +212,13 @@ class KeywordMemoryManager(BaseMemoryManager):
         )
 
     def write_memory(self, record: MemoryRecord) -> None:
-        key = self._build_key(record.experiment_id, record.task_id, record.query)
+        key = self._build_key(
+            record.experiment_id,
+            record.task_id,
+            record.query,
+            getattr(record, "stream_id", "") or "",
+        )
+
         if self.deduplicate and key in self._memory_keys:
             return
 
@@ -219,14 +251,14 @@ class KeywordMemoryManager(BaseMemoryManager):
                 continue
 
             old_item = dedup_map[norm_text]
-
             old_score = float(old_item.get("score", 0.0))
             new_score = float(item.get("score", 0.0))
-
             old_order = old_item.get("task_order", 10**9)
             new_order = item.get("task_order", 10**9)
 
-            if (new_score > old_score) or (new_score == old_score and new_order < old_order):
+            if (new_score > old_score) or (
+                new_score == old_score and new_order < old_order
+            ):
                 dedup_map[norm_text] = item
 
         return list(dedup_map.values())

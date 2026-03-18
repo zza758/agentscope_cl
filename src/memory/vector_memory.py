@@ -32,20 +32,24 @@ class VectorMemoryManager(BaseMemoryManager):
     ):
         self.storage_path = Path(storage_path)
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-
         self.embedder = embedder
         self.default_top_k = default_top_k
         self.persistent = persistent
         self.deduplicate = deduplicate
-
         self._memory_bank: List[Dict[str, Any]] = []
         self._memory_keys = set()
 
         if self.persistent:
             self._load_memories()
 
-    def _build_key(self, experiment_id: str, task_id: str, query: str) -> str:
-        return f"{experiment_id}::{task_id}::{query.strip()}"
+    def _build_key(
+        self,
+        experiment_id: str,
+        task_id: str,
+        query: str,
+        stream_id: str = "",
+    ) -> str:
+        return f"{experiment_id}::{stream_id}::{task_id}::{query.strip()}"
 
     def _load_memories(self) -> None:
         self._memory_bank = []
@@ -79,11 +83,14 @@ class VectorMemoryManager(BaseMemoryManager):
                 if "content" not in record:
                     record["content"] = record.get("memory_summary", "")
 
-                if "task_type" not in record:
-                    record["task_type"] = None
-
-                if "entity" not in record:
-                    record["entity"] = None
+                # benchmark / structured memory 默认字段
+                record.setdefault("stream_id", None)
+                record.setdefault("task_type", None)
+                record.setdefault("entity", None)
+                record.setdefault("support_task_ids", [])
+                record.setdefault("source_dataset", None)
+                record.setdefault("source_sample_id", None)
+                record.setdefault("meta", {})
 
                 self._memory_bank.append(record)
                 self._memory_keys.add(
@@ -91,6 +98,7 @@ class VectorMemoryManager(BaseMemoryManager):
                         record.get("experiment_id", ""),
                         record.get("task_id", ""),
                         record.get("query", ""),
+                        record.get("stream_id", "") or "",
                     )
                 )
 
@@ -163,30 +171,34 @@ class VectorMemoryManager(BaseMemoryManager):
             )
 
             score = base_score + meta_score
-
             if score <= 0:
                 continue
 
             scored.append(
                 {
                     "experiment_id": mem.get("experiment_id"),
+                    "stream_id": mem.get("stream_id"),
                     "task_id": mem.get("task_id"),
                     "task_order": mem.get("task_order"),
                     "query": mem.get("query"),
                     "answer_raw": mem.get("answer_raw", ""),
                     "memory_summary": mem.get("memory_summary", content),
                     "strategy_note": mem.get("strategy_note", ""),
-                    "content": content,
-                    "score": score,
-                    "created_at": mem.get("created_at"),
-                    "base_score": base_score,
                     "task_type": mem.get("task_type"),
                     "entity": mem.get("entity"),
+                    "support_task_ids": mem.get("support_task_ids", []),
+                    "source_dataset": mem.get("source_dataset"),
+                    "source_sample_id": mem.get("source_sample_id"),
+                    "meta": mem.get("meta", {}),
+                    "content": content,
+                    "score": score,
+                    "base_score": base_score,
+                    "meta_score": meta_score,
+                    "created_at": mem.get("created_at"),
                 }
             )
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-
         deduped = self._deduplicate_scored_items(scored)
         deduped.sort(key=lambda x: x["score"], reverse=True)
 
@@ -198,7 +210,13 @@ class VectorMemoryManager(BaseMemoryManager):
         )
 
     def write_memory(self, record: MemoryRecord) -> None:
-        key = self._build_key(record.experiment_id, record.task_id, record.query)
+        key = self._build_key(
+            record.experiment_id,
+            record.task_id,
+            record.query,
+            getattr(record, "stream_id", "") or "",
+        )
+
         if self.deduplicate and key in self._memory_keys:
             return
 
@@ -235,14 +253,14 @@ class VectorMemoryManager(BaseMemoryManager):
                 continue
 
             old_item = dedup_map[norm_text]
-
             old_score = float(old_item.get("score", 0.0))
             new_score = float(item.get("score", 0.0))
-
             old_order = old_item.get("task_order", 10**9)
             new_order = item.get("task_order", 10**9)
 
-            if (new_score > old_score) or (new_score == old_score and new_order < old_order):
+            if (new_score > old_score) or (
+                new_score == old_score and new_order < old_order
+            ):
                 dedup_map[norm_text] = item
 
         return list(dedup_map.values())

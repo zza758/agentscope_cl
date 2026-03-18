@@ -3,7 +3,6 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import jieba
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
@@ -15,22 +14,29 @@ def normalize_text(text: str) -> str:
     - 去除首尾空白
     - 去除中间多余空白
     """
-    text = text.lower().strip()
+    text = (text or "").lower().strip()
     text = re.sub(r"\s+", "", text)
     return text
 
 
-def tokenize_zh(text: str) -> List[str]:
+def tokenize_text(text: str) -> List[str]:
     """
-    中文分词
+    轻量 tokenizer：
+    - 英文/数字/下划线：按连续 token 切分
+    - 中文：按单字切分
+    不依赖 jieba，适合作为稳定的零额外依赖检索基线。
     """
-    text = normalize_text(text)
-    return [w.strip() for w in jieba.lcut(text) if w.strip()]
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    tokens = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]", text)
+    return [t.strip().lower() for t in tokens if t.strip()]
 
 
 def char_ngrams(text: str, n: int = 2) -> List[str]:
     """
-    字符级 n-gram，用于增强中文短文本匹配鲁棒性
+    字符级 n-gram，用于增强短文本匹配鲁棒性
     """
     text = normalize_text(text)
     if len(text) < n:
@@ -95,30 +101,28 @@ class SimpleKnowledgeBase:
         """
         基于混合打分的简单检索：
         1. phrase_score：query 归一化后整体是否包含于文档
-        2. token_overlap：分词交集
+        2. token_overlap：token 交集
         3. bigram_overlap：字符二元组交集
         """
         query_norm = normalize_text(query)
-        query_terms = set(tokenize_zh(query))
+        query_terms = set(tokenize_text(query))
         query_bigrams = set(char_ngrams(query, n=2))
 
         scored = []
-
         for doc in self.docs:
             text = doc.get("content", "")
             text_norm = normalize_text(text)
-            text_terms = set(tokenize_zh(text))
+            text_terms = set(tokenize_text(text))
             text_bigrams = set(char_ngrams(text, n=2))
 
             phrase_score = 0.0
-            if query_norm in text_norm:
+            if query_norm and query_norm in text_norm:
                 phrase_score += 5.0
 
             token_overlap = len(query_terms & text_terms)
             bigram_overlap = len(query_bigrams & text_bigrams)
 
             score = phrase_score + 2.0 * token_overlap + 0.5 * bigram_overlap
-
             if score > 0:
                 scored.append(
                     {
@@ -139,7 +143,6 @@ class SimpleKnowledgeBase:
         """
         if not self.enable_retrieval_logging:
             return
-
         if self.mysql_logger is None or self.current_task_run_id is None:
             return
 
@@ -161,20 +164,10 @@ class SimpleKnowledgeBase:
         score_threshold: Optional[float] = None,
     ) -> ToolResponse:
         """
-        AgentScope 工具函数：
-        根据 query 检索知识库，返回 ToolResponse。
-
-        Args:
-            query: 检索问题
-            limit: 返回条数
-            score_threshold: 最低分数阈值
-
-        Returns:
-            ToolResponse
+        AgentScope 工具函数：根据 query 检索知识库，返回 ToolResponse。
         """
         if limit is None:
             limit = self.default_top_k
-
         if score_threshold is None:
             score_threshold = self.default_score_threshold
 

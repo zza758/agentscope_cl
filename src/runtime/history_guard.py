@@ -15,6 +15,11 @@ def is_legal_history_record(mem: dict, task_context: Any) -> bool:
     if mem.get("experiment_id") != task_context.experiment_id:
         return False
 
+    ctx_stream_id = getattr(task_context, "stream_id", None)
+    mem_stream_id = mem.get("stream_id")
+    if ctx_stream_id is not None and mem_stream_id != ctx_stream_id:
+        return False
+
     mem_order = mem.get("task_order")
     if mem_order is None or mem_order >= task_context.task_order:
         return False
