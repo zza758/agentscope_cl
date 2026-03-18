@@ -57,12 +57,15 @@ class TaskRunner:
         self.enable_kb_runtime_context = enable_kb_runtime_context
 
     def _retrieve_memories(
-        self,
-        query: str,
-        task_context: TaskContext,
-        task_type: Optional[str] = None,
-        task_entity: Optional[str] = None,
+            self,
+            query: str,
+            task_context: TaskContext,
+            task_type: Optional[str] = None,
+            task_entity: Optional[str] = None,
+            final_top_k: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        if final_top_k is None:
+            final_top_k = self.memory_top_k
         if not self.ablation_cfg.get("use_memory", True):
             return []
         if self.memory_manager is None:
@@ -104,7 +107,7 @@ class TaskRunner:
                 candidates=memory_items,
             )
         else:
-            memory_items = memory_items[: self.memory_top_k]
+            memory_items = memory_items[: final_top_k]
 
         return memory_items
 
@@ -296,11 +299,15 @@ class TaskRunner:
             limit=effective_top_k,
         )
 
+        raw_support_memory_items = support_memory_items
+        support_memory_items = self._filter_support_memories(support_memory_items)
+
         retrieved_memory_items = self._retrieve_memories(
             query=query,
             task_context=task_context,
             task_type=task_type,
             task_entity=entity,
+            final_top_k=effective_top_k,
         )
 
         memory_items = self._merge_memory_items(
@@ -309,17 +316,25 @@ class TaskRunner:
             limit=effective_top_k,
         )
 
-        t_retrieve_end = time.perf_counter()
+        if raw_support_memory_items:
+            self.mysql_logger.log_memory(
+                task_run_id=task_run_id,
+                memory_key=f"task:{task_id}:support_retrieve_raw",
+                operation_type="support_retrieve_raw",
+                memory_content=self._format_memory_items(raw_support_memory_items),
+                relevance_score=raw_support_memory_items[0].get("score"),
+            )
 
         if support_memory_items:
-            support_formatted = self._format_memory_items(support_memory_items)
             self.mysql_logger.log_memory(
                 task_run_id=task_run_id,
                 memory_key=f"task:{task_id}:support_retrieve",
                 operation_type="support_retrieve",
-                memory_content=support_formatted,
+                memory_content=self._format_memory_items(support_memory_items),
                 relevance_score=support_memory_items[0].get("score"),
             )
+
+        t_retrieve_end = time.perf_counter()
 
         memories = [item.get("content", "") for item in memory_items]
         formatted_memories = self._format_memory_items(memory_items)
@@ -498,6 +513,8 @@ class TaskRunner:
             "total_ms": latency_ms,
             "memory_candidates": len(memory_items),
             "memory_written": memory_written,
+            "raw_support_candidates": len(raw_support_memory_items),
+            "filtered_support_candidates": len(support_memory_items),
         }
         self._maybe_log_profile(
             task_run_id=task_run_id,
@@ -524,3 +541,44 @@ class TaskRunner:
             "policy_result": policy_result,
             "profile": profile,
         }
+
+    def _filter_support_memories(
+            self,
+            support_items: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        过滤掉明显低质量的 support memory：
+        1. 未知/未提供/无法确定/需进一步查询
+        2. 明显占位符答案（如 #1、#2、#3）
+        """
+        bad_patterns = [
+            "未知",
+            "未提供",
+            "无法确定",
+            "需进一步查询",
+            "缺乏具体信息",
+            "需要具体信息来确定",
+            "需根据具体情况确定",
+            "信息未说明",
+            "尚不清楚",
+        ]
+
+        filtered = []
+        for item in support_items:
+            text = (item.get("memory_summary") or item.get("content") or "").strip()
+
+            if not text:
+                continue
+
+            # 低质量 / 不可用结论
+            if any(p in text for p in bad_patterns):
+                continue
+
+            # 占位符型信息，通常说明 subq 还没有被真正解析为实体
+            placeholder_tokens = ["#1", "#2", "#3", "#4", "#5"]
+            if any(tok in text for tok in placeholder_tokens):
+                continue
+
+            filtered.append(item)
+
+        return filtered

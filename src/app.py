@@ -239,6 +239,10 @@ async def main():
     parser.add_argument("--max-concurrent-streams", type=int, default=4)
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--disable-retrieval-logging", action="store_true")
+    parser.add_argument("--use-contrastive-rerank", action="store_true")
+    parser.add_argument("--disable-contrastive-rerank", action="store_true")
+    parser.add_argument("--memory-backend", choices=["keyword", "vector"], default=None)
+    parser.add_argument("--memory-top-k", type=int, default=None)
     args = parser.parse_args()
 
     task_file = args.task_file or args.tasks_file
@@ -249,6 +253,22 @@ async def main():
     ablation_cfg = config["ablation"]
     memory_cfg = config["memory"]
     kb_cfg = config["knowledge_base"]
+
+    # ===== runtime override: 避免为每一轮对照准备单独 config 文件 =====
+    if args.use_contrastive_rerank:
+        ablation_cfg["use_contrastive_rerank"] = True
+        config.setdefault("contrastive", {})
+        config["contrastive"]["enabled"] = True
+        config["contrastive"]["rerank_enabled"] = True
+
+    if args.disable_contrastive_rerank:
+        ablation_cfg["use_contrastive_rerank"] = False
+
+    if args.memory_backend is not None:
+        memory_cfg["backend"] = args.memory_backend
+
+    if args.memory_top_k is not None:
+        memory_cfg["top_k"] = args.memory_top_k
 
     experiment_id = args.experiment_id or datetime.now().strftime("exp_%Y%m%d_%H%M%S")
     print(f"[Experiment] 当前实验ID: {experiment_id}", flush=True)
