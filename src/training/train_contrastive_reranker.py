@@ -24,6 +24,16 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     return records
 
 
+def format_query_text(text: str) -> str:
+    text = (text or "").strip()
+    return f"query: {text}"
+
+
+def format_passage_text(text: str) -> str:
+    text = (text or "").strip()
+    return f"passage: {text}"
+
+
 class ContrastiveMemoryDataset(Dataset):
     def __init__(self, records: List[Dict[str, Any]]):
         self.records = records
@@ -34,9 +44,9 @@ class ContrastiveMemoryDataset(Dataset):
     def __getitem__(self, idx):
         item = self.records[idx]
         return {
-            "query": item["query"],
-            "positive": item["positive_memory_summary"],
-            "negative": item["negative_memory_summary"],
+            "query": format_query_text(item["query"]),
+            "positive": format_passage_text(item["positive_memory_summary"]),
+            "negative": format_passage_text(item["negative_memory_summary"]),
         }
 
 
@@ -58,13 +68,13 @@ class ContrastiveEncoder(nn.Module):
         return embeddings
 
     def forward(
-            self,
-            q_input_ids,
-            q_attention_mask,
-            p_input_ids,
-            p_attention_mask,
-            n_input_ids,
-            n_attention_mask,
+        self,
+        q_input_ids,
+        q_attention_mask,
+        p_input_ids,
+        p_attention_mask,
+        n_input_ids,
+        n_attention_mask,
     ):
         q_emb = self.encode(q_input_ids, q_attention_mask)
         p_emb = self.encode(p_input_ids, p_attention_mask)
@@ -136,14 +146,12 @@ def train():
 
     print(f"读取训练样本数: {len(records)}")
 
-    tokenizer = AutoTokenizer.from_pretrained(contrastive_cfg["model_name_or_path"])
-    model = ContrastiveEncoder(contrastive_cfg["model_name_or_path"])
+    model_name_or_path = contrastive_cfg["model_name_or_path"]
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+    model = ContrastiveEncoder(model_name_or_path)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
-    print("torch_cuda_available =", torch.cuda.is_available())
-    if torch.cuda.is_available():
-        print("torch_device_name =", torch.cuda.get_device_name(0))
 
     dataset = ContrastiveMemoryDataset(records)
     dataloader = DataLoader(
@@ -160,15 +168,14 @@ def train():
         model.parameters(),
         lr=float(contrastive_cfg.get("learning_rate", 2e-5)),
     )
-
     criterion = nn.TripletMarginLoss(
         margin=float(contrastive_cfg.get("margin", 0.2)),
         p=2,
     )
 
     num_epochs = int(contrastive_cfg.get("num_epochs", 3))
-
     model.train()
+
     for epoch in range(num_epochs):
         total_loss = 0.0
 
@@ -197,10 +204,8 @@ def train():
 
     save_dir = output_dir / "contrastive_encoder"
     save_dir.mkdir(parents=True, exist_ok=True)
-
     model.encoder.save_pretrained(save_dir)
     tokenizer.save_pretrained(save_dir)
-
     print(f"模型已保存到: {save_dir}")
 
 

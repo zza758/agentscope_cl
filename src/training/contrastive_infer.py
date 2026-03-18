@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 from typing import List
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,6 +10,16 @@ from transformers import AutoTokenizer, AutoModel
 SRC_ROOT = Path(__file__).resolve().parents[1]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+
+
+def format_query_text(text: str) -> str:
+    text = (text or "").strip()
+    return f"query: {text}"
+
+
+def format_passage_text(text: str) -> str:
+    text = (text or "").strip()
+    return f"passage: {text}"
 
 
 class ContrastiveEncoder(nn.Module):
@@ -63,7 +74,10 @@ class ContrastiveEncoderInfer:
         if not candidates:
             return []
 
-        query_vec = self.encode_texts([query])[0]
-        cand_vecs = self.encode_texts(candidates)
+        formatted_query = format_query_text(query)
+        formatted_candidates = [format_passage_text(x) for x in candidates]
+
+        query_vec = self.encode_texts([formatted_query])[0]
+        cand_vecs = self.encode_texts(formatted_candidates)
         sims = self.cosine_similarity(query_vec, cand_vecs)
         return sims.tolist()
