@@ -1,22 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" serverName="root@connect.bjb2.seetacloud.com:31993 password (2)" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false" showDifferentInSync="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="root@connect.bjb2.seetacloud.com:25529 password" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false" showDifferentInSync="false">
     <option name="confirmBeforeUploading" value="false" />
     <serverData>
-      <paths name="root@connect.bjb2.seetacloud.com:31993 password">
+      <paths name="root@connect.bjb2.seetacloud.com:25529 password">
         <serverdata>
           <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/root/agentscope_cl" local="$PROJECT_DIR$" />
           </mappings>
-        </serverdata>
-      </paths>
-      <paths name="root@connect.bjb2.seetacloud.com:31993 password (2)">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/root/agentscope_cl" local="$PROJECT_DIR$" web="/" />
-          </mappings>
+          <excludedPaths>
+            <excludedPath path="/root/agentscope_cl/data/benchmarks" />
+            <excludedPath path="/root/agentscope_cl/outputs" />
+          </excludedPaths>
         </serverdata>
       </paths>
     </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
   </component>
 </project>

@@ -1,4 +1,5 @@
 from dataclasses import dataclass, asdict, field
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 
@@ -12,16 +13,16 @@ class MemoryRecord:
     answer_raw: str
     memory_summary: str
     strategy_note: str
+    created_at: str
 
     task_type: Optional[str] = None
     entity: Optional[str] = None
-    memory_type: str = "fact"
-
     support_task_ids: List[str] = field(default_factory=list)
 
-    created_at: str = ""
+    memory_type: str = "fact"  # fact / strategy / error / update
     valid_from: Optional[str] = None
     valid_to: Optional[str] = None
+    supersedes_task_id: Optional[str] = None
 
     confidence: Optional[float] = None
     reuse_count: int = 0

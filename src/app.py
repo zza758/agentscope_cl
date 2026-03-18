@@ -16,6 +16,7 @@ from src.reranker.contrastive_reranker import ContrastiveReranker
 from src.training.contrastive_infer import ContrastiveEncoderInfer
 from src.policy.rule_policy import RuleBasedMemoryPolicy
 from src.policy.rl_policy import RLMemoryPolicy
+from src.storage.null_logger import NullLogger
 
 
 def load_tasks(tasks_file: str):
@@ -89,7 +90,11 @@ async def main():
     )
 
     # 2. 初始化数据库日志器
-    mysql_logger = MySQLLogger(config["database"])
+    db_cfg = config.get("database", {})
+    if db_cfg.get("enabled", False):
+        mysql_logger = MySQLLogger(db_cfg)
+    else:
+        mysql_logger = NullLogger()
 
     # 3. 绑定知识库日志器，并设置检索日志开关
     kb.bind_logger(mysql_logger)
