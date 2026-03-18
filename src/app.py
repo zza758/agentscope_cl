@@ -38,7 +38,6 @@ def load_legacy_tasks(tasks_file: str):
 def build_logger(args, config, experiment_id: str):
     backend = args.logger_backend
     db_cfg = config.get("database", {})
-
     if backend == "auto":
         backend = "mysql" if db_cfg.get("enabled", False) else "jsonl"
 
@@ -57,14 +56,12 @@ def build_logger(args, config, experiment_id: str):
             flush_every=int(logger_cfg.get("flush_every", 100)),
             flush_interval=float(logger_cfg.get("flush_interval", 1.0)),
         )
-
     return JSONLLogger(str(target_dir))
 
 
 def build_memory_manager(config, ablation_cfg):
     memory_cfg = config["memory"]
     embedding_cfg = config.get("embedding", {})
-
     memory_path = Path(memory_cfg["storage_path"])
     if not memory_path.is_absolute():
         memory_path = PROJECT_ROOT / memory_path
@@ -115,7 +112,6 @@ def build_contrastive_reranker(config, ablation_cfg):
     model_dir = Path(contrastive_cfg["model_dir"])
     if not model_dir.is_absolute():
         model_dir = PROJECT_ROOT / model_dir
-
     infer_engine = ContrastiveEncoderInfer(
         model_dir=str(model_dir),
         max_length=int(contrastive_cfg.get("max_length", 128)),
@@ -139,7 +135,6 @@ def build_runner_factory(
 ) -> Callable[[], TaskRunner]:
     def _factory():
         retrieval_func = kb.retrieve_knowledge if ablation_cfg.get("use_knowledge_base", True) else None
-
         if args.mode == "benchmark":
             runtime_model_config = config.get("llm", config["model"])
             benchmark_fast_agent = True
@@ -153,7 +148,6 @@ def build_runner_factory(
             enable_kb_tool=ablation_cfg.get("use_knowledge_base", True),
             benchmark_fast=benchmark_fast_agent,
         )
-
         memory_policy = build_policy(args, memory_top_k=memory_cfg.get("top_k", 3))
         return TaskRunner(
             agent=agent,
@@ -168,6 +162,7 @@ def build_runner_factory(
             experiment_id=experiment_id,
             enable_profile=args.profile,
             enable_kb_runtime_context=enable_kb_runtime_context,
+            quality_gate_cfg=config.get("memory_quality_gate", {}),
         )
 
     return _factory
@@ -183,7 +178,6 @@ async def run_one_stream(
         runner = runner_factory()
         results = []
         print(f"[StreamStart] stream={stream_id} tasks={len(stream_tasks)}", flush=True)
-
         for task in stream_tasks:
             try:
                 result = await runner.run_single_task(task=task)
@@ -199,7 +193,6 @@ async def run_one_stream(
                     flush=True,
                 )
                 raise
-
         print(f"[StreamDone] stream={stream_id} finished_tasks={len(results)}", flush=True)
         return stream_id, results
 
@@ -241,6 +234,7 @@ async def main():
     parser.add_argument("--disable-retrieval-logging", action="store_true")
     parser.add_argument("--use-contrastive-rerank", action="store_true")
     parser.add_argument("--disable-contrastive-rerank", action="store_true")
+    parser.add_argument("--disable-memory-quality-gate", action="store_true")
     parser.add_argument("--memory-backend", choices=["keyword", "vector"], default=None)
     parser.add_argument("--memory-top-k", type=int, default=None)
     args = parser.parse_args()
@@ -254,19 +248,18 @@ async def main():
     memory_cfg = config["memory"]
     kb_cfg = config["knowledge_base"]
 
-    # ===== runtime override: 避免为每一轮对照准备单独 config 文件 =====
     if args.use_contrastive_rerank:
         ablation_cfg["use_contrastive_rerank"] = True
         config.setdefault("contrastive", {})
         config["contrastive"]["enabled"] = True
         config["contrastive"]["rerank_enabled"] = True
-
     if args.disable_contrastive_rerank:
         ablation_cfg["use_contrastive_rerank"] = False
-
+    if args.disable_memory_quality_gate:
+        config.setdefault("memory_quality_gate", {})
+        config["memory_quality_gate"]["enabled"] = False
     if args.memory_backend is not None:
         memory_cfg["backend"] = args.memory_backend
-
     if args.memory_top_k is not None:
         memory_cfg["top_k"] = args.memory_top_k
 
@@ -276,23 +269,17 @@ async def main():
     kb_path = Path(kb_cfg["kb_path"])
     if not kb_path.is_absolute():
         kb_path = PROJECT_ROOT / kb_path
-
     kb = SimpleKnowledgeBase(
         kb_path=str(kb_path),
         default_top_k=kb_cfg.get("top_k", 3),
         score_threshold=kb_cfg.get("score_threshold"),
     )
-
     logger = build_logger(args, config, experiment_id=experiment_id)
     kb.bind_logger(logger)
 
     enable_retrieval_logging = ablation_cfg.get("use_retrieval_logging", True)
     if args.disable_retrieval_logging:
         enable_retrieval_logging = False
-
-    # 当前 retrieval_tool 依赖共享的 current_task_run_id。
-    # 并行 stream 模式下，如果开启 retrieval logging，会发生并发覆盖。
-    # 这一轮为了保证正确性，自动关闭。
     if args.mode == "benchmark" and args.max_concurrent_streams > 1 and enable_retrieval_logging:
         print(
             "[Warn] 并行 stream 模式下自动关闭 retrieval logging，以避免共享 runtime_context 冲突。",
@@ -305,7 +292,6 @@ async def main():
 
     memory_manager = build_memory_manager(config, ablation_cfg)
     contrastive_cfg, contrastive_reranker = build_contrastive_reranker(config, ablation_cfg)
-
     runner_factory = build_runner_factory(
         config=config,
         ablation_cfg=ablation_cfg,
@@ -330,7 +316,6 @@ async def main():
                 max_tasks=args.max_tasks,
                 stream_limit=args.stream_limit,
             )
-
             task_cache = BenchmarkTaskCache.from_tasks(tasks)
             print(
                 f"[Run] mode={args.mode} dataset={args.dataset} "
@@ -338,7 +323,6 @@ async def main():
                 f"max_concurrent_streams={args.max_concurrent_streams}",
                 flush=True,
             )
-
             if args.max_concurrent_streams <= 1:
                 runner = runner_factory()
                 for task in task_cache.flatten():
@@ -356,36 +340,30 @@ async def main():
                     runner_factory=runner_factory,
                     max_concurrent_streams=args.max_concurrent_streams,
                 )
-
                 finished_tasks = 0
                 failed_streams = 0
                 failed_details = []
-
                 for item in stream_results:
                     if isinstance(item, Exception):
                         failed_streams += 1
                         failed_details.append(repr(item))
                         print(f"[StreamError] {repr(item)}", flush=True)
                         continue
-
                     stream_id, results = item
                     finished_tasks += len(results)
                     print(
                         f"[StreamSummary] stream={stream_id} finished_tasks={len(results)}",
                         flush=True,
                     )
-
                 print(
                     f"[Done] benchmark parallel finished. "
                     f"streams={len(stream_results)} tasks={finished_tasks} failed_streams={failed_streams}",
                     flush=True,
                 )
-
                 if failed_details:
                     print("[FailedDetails]", flush=True)
                     for detail in failed_details:
                         print(detail, flush=True)
-
         else:
             tasks = load_legacy_tasks(task_file)
             if args.task_ids:
@@ -395,7 +373,6 @@ async def main():
                 tasks = tasks[: args.max_tasks]
 
             print(f"[Run] mode={args.mode} dataset={args.dataset} tasks={len(tasks)}", flush=True)
-
             runner = runner_factory()
             for task in tasks:
                 result = await runner.run_single_task(task=task)

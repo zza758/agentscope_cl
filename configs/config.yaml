@@ -10,6 +10,7 @@ model:
   max_tokens: 1500
   stream: false
 
+
 database:
   host:
   port:
@@ -25,7 +26,7 @@ knowledge_base:
 
 memory:
   enabled: true
-  backend: "vector"         # "keyword" / "vector"
+  backend: "vector"   # "keyword" / "vector"
   persistent: true
   deduplicate: true
   top_k: 3
@@ -54,6 +55,37 @@ ablation:
 memory_policy:
   max_select_k: 3
   min_summary_len: 10
+
+memory_quality_gate:
+  enabled: true
+  reject_unknown: true
+  reject_placeholder: true
+  min_summary_len_default: 8
+  min_summary_len_by_task_type:
+    decomposition_qa: 4
+    comparison: 10
+    focused_summary: 8
+    suggestion: 8
+  unknown_patterns:
+    - "未知"
+    - "未提供"
+    - "无法确定"
+    - "不清楚"
+    - "信息不足"
+    - "unknown"
+    - "not provided"
+    - "cannot determine"
+  placeholder_patterns:
+    - "#1"
+    - "#2"
+    - "#3"
+    - "#4"
+    - "#5"
+    - "#\\d+"
+  weak_patterns:
+    - "需要进一步查询"
+    - "需进一步查询"
+    - "根据历史经验"
 
 rl_policy:
   alpha: 0.5

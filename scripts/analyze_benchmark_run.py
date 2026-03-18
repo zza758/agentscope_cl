@@ -3,10 +3,10 @@
 
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
 from statistics import mean, median
 from typing import Any, Dict, List
-
 
 UNKNOWN_PATTERNS = [
     "未知",
@@ -44,14 +44,7 @@ def percentile(values: List[float], p: float) -> float:
 
 def summarize_metric(values: List[float]) -> Dict[str, float]:
     if not values:
-        return {
-            "count": 0,
-            "mean": 0.0,
-            "median": 0.0,
-            "p95": 0.0,
-            "min": 0.0,
-            "max": 0.0,
-        }
+        return {"count": 0, "mean": 0.0, "median": 0.0, "p95": 0.0, "min": 0.0, "max": 0.0}
     return {
         "count": len(values),
         "mean": round(mean(values), 2),
@@ -65,6 +58,16 @@ def summarize_metric(values: List[float]) -> Dict[str, float]:
 def contains_unknown(text: str) -> bool:
     text = (text or "").lower()
     return any(p.lower() in text for p in UNKNOWN_PATTERNS)
+
+
+def maybe_load_memory_payload(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
 
 
 def main():
@@ -107,16 +110,20 @@ def main():
     total_ms = []
     raw_support_candidates = []
     filtered_support_candidates = []
-
+    support_filter_drop_ratios = []
     for row in profile_logs:
         p = row.get("profile", {})
+        raw_cnt = float(p.get("raw_support_candidates", 0.0))
+        filtered_cnt = float(p.get("filtered_support_candidates", 0.0))
         retrieve_ms.append(float(p.get("retrieve_ms", 0.0)))
         compose_ms.append(float(p.get("compose_ms", 0.0)))
         agent_ms.append(float(p.get("agent_ms", 0.0)))
         memory_write_ms.append(float(p.get("memory_write_ms", 0.0)))
         total_ms.append(float(p.get("total_ms", 0.0)))
-        raw_support_candidates.append(float(p.get("raw_support_candidates", 0.0)))
-        filtered_support_candidates.append(float(p.get("filtered_support_candidates", 0.0)))
+        raw_support_candidates.append(raw_cnt)
+        filtered_support_candidates.append(filtered_cnt)
+        if raw_cnt > 0:
+            support_filter_drop_ratios.append((raw_cnt - filtered_cnt) / raw_cnt)
 
     task_rows = []
     for result in task_results:
@@ -138,11 +145,7 @@ def main():
         )
 
     has_explicit_final_tasks = any(x["is_final_task"] for x in task_rows)
-    if has_explicit_final_tasks:
-        eval_rows = [x for x in task_rows if x["is_final_task"]]
-    else:
-        eval_rows = list(task_rows)
-
+    eval_rows = [x for x in task_rows if x["is_final_task"]] if has_explicit_final_tasks else list(task_rows)
     unknown_count = sum(1 for x in eval_rows if x["contains_unknown"])
     unknown_ratio = round(unknown_count / len(eval_rows), 4) if eval_rows else 0.0
 
@@ -150,6 +153,15 @@ def main():
     support_retrieve_raw_count = 0
     support_retrieve_task_runs = set()
     support_retrieve_raw_task_runs = set()
+
+    write_candidate_count = 0
+    write_count = 0
+    write_skip_quality_count = 0
+    write_skip_policy_count = 0
+    contains_placeholder_count = 0
+    contains_unknown_count = 0
+    memory_quality_dist = Counter()
+    gate_reason_dist = Counter()
 
     for row in memory_logs:
         op = row.get("operation_type")
@@ -159,6 +171,25 @@ def main():
         elif op == "support_retrieve_raw":
             support_retrieve_raw_count += 1
             support_retrieve_raw_task_runs.add(row.get("task_run_id"))
+
+        if op in {"write_candidate", "write", "write_skip_quality", "write_skip_policy"}:
+            payload = maybe_load_memory_payload(row.get("memory_content", ""))
+            if op == "write_candidate":
+                write_candidate_count += 1
+            elif op == "write":
+                write_count += 1
+            elif op == "write_skip_quality":
+                write_skip_quality_count += 1
+            elif op == "write_skip_policy":
+                write_skip_policy_count += 1
+
+            if payload:
+                if payload.get("contains_placeholder") is True:
+                    contains_placeholder_count += 1
+                if payload.get("contains_unknown") is True:
+                    contains_unknown_count += 1
+                memory_quality_dist.update([payload.get("memory_quality", "unknown")])
+                gate_reason_dist.update([payload.get("gate_reason", "") or ""])
 
     summary = {
         "experiment_id": args.experiment_id,
@@ -178,6 +209,7 @@ def main():
             "total_ms": summarize_metric(total_ms),
             "raw_support_candidates": summarize_metric(raw_support_candidates),
             "filtered_support_candidates": summarize_metric(filtered_support_candidates),
+            "support_filter_drop_ratio": summarize_metric(support_filter_drop_ratios),
         },
         "quality": {
             "evaluated_rows": len(eval_rows),
@@ -189,6 +221,16 @@ def main():
             "support_retrieve_task_runs": len(support_retrieve_task_runs),
             "support_retrieve_raw_count": support_retrieve_raw_count,
             "support_retrieve_raw_task_runs": len(support_retrieve_raw_task_runs),
+        },
+        "memory_write": {
+            "write_candidate_count": write_candidate_count,
+            "write_count": write_count,
+            "write_skip_quality_count": write_skip_quality_count,
+            "write_skip_policy_count": write_skip_policy_count,
+            "contains_placeholder_count": contains_placeholder_count,
+            "contains_unknown_count": contains_unknown_count,
+            "memory_quality_dist": dict(memory_quality_dist),
+            "gate_reason_dist": dict(gate_reason_dist),
         },
         "missing_result_examples": missing_result_runs[:5],
         "final_task_examples": eval_rows[:5],
@@ -205,11 +247,11 @@ def main():
     print(json.dumps(summary["quality"], ensure_ascii=False, indent=2))
     print("- support_memory")
     print(json.dumps(summary["support_memory"], ensure_ascii=False, indent=2))
-
+    print("- memory_write")
+    print(json.dumps(summary["memory_write"], ensure_ascii=False, indent=2))
     if missing_result_runs:
         print("- missing_result_examples")
         print(json.dumps(summary["missing_result_examples"], ensure_ascii=False, indent=2))
-
     if summary["final_task_examples"]:
         print("- final_task_examples")
         print(json.dumps(summary["final_task_examples"], ensure_ascii=False, indent=2))

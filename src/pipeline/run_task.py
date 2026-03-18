@@ -1,3 +1,4 @@
+import json
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -5,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from agentscope.message import Msg
 
 from src.memory.memory_record import MemoryRecord
+from src.memory.quality_gate import assess_memory_quality
 from src.runtime.task_context import TaskContext
 from src.utils.structured_answer import parse_structured_answer
 
@@ -42,6 +44,7 @@ class TaskRunner:
         experiment_id: str = "default_exp",
         enable_profile: bool = False,
         enable_kb_runtime_context: bool = True,
+        quality_gate_cfg: Optional[Dict[str, Any]] = None,
     ):
         self.agent = agent
         self.memory_manager = memory_manager
@@ -55,14 +58,15 @@ class TaskRunner:
         self.experiment_id = experiment_id
         self.enable_profile = enable_profile
         self.enable_kb_runtime_context = enable_kb_runtime_context
+        self.quality_gate_cfg = quality_gate_cfg or {}
 
     def _retrieve_memories(
-            self,
-            query: str,
-            task_context: TaskContext,
-            task_type: Optional[str] = None,
-            task_entity: Optional[str] = None,
-            final_top_k: Optional[int] = None,
+        self,
+        query: str,
+        task_context: TaskContext,
+        task_type: Optional[str] = None,
+        task_entity: Optional[str] = None,
+        final_top_k: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         if final_top_k is None:
             final_top_k = self.memory_top_k
@@ -73,9 +77,7 @@ class TaskRunner:
 
         candidate_top_k = self.memory_top_k
         if self.contrastive_cfg.get("rerank_enabled", False):
-            candidate_top_k = int(
-                self.contrastive_cfg.get("candidate_top_k", self.memory_top_k)
-            )
+            candidate_top_k = int(self.contrastive_cfg.get("candidate_top_k", self.memory_top_k))
 
         memory_items = self.memory_manager.retrieve_memory_with_scores(
             query=query,
@@ -84,7 +86,6 @@ class TaskRunner:
             task_type=task_type,
             task_entity=task_entity,
         )
-
         if (
             self.ablation_cfg.get("use_contrastive_rerank", False)
             and self.contrastive_cfg.get("rerank_enabled", False)
@@ -107,15 +108,13 @@ class TaskRunner:
                 candidates=memory_items,
             )
         else:
-            memory_items = memory_items[: final_top_k]
-
+            memory_items = memory_items[:final_top_k]
         return memory_items
 
     @staticmethod
     def _format_memory_items(memory_items: List[Dict[str, Any]]) -> str:
         if not memory_items:
             return "暂无历史经验。"
-
         lines = []
         for idx, item in enumerate(memory_items, start=1):
             base_score = item.get("score")
@@ -136,16 +135,17 @@ class TaskRunner:
                 meta.append(f"task_type={item['task_type']}")
             if item.get("entity"):
                 meta.append(f"entity={item['entity']}")
+            if item.get("memory_quality"):
+                meta.append(f"quality={item['memory_quality']}")
             meta_text = f" ({'; '.join(meta)})" if meta else ""
             lines.append(f"{prefix}{meta_text} {item.get('content', '')}")
-
         return "\n".join(lines)
 
     def _get_support_memories(
-            self,
-            support_task_ids: List[str],
-            task_context: TaskContext,
-            limit: Optional[int] = None,
+        self,
+        support_task_ids: List[str],
+        task_context: TaskContext,
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         if not support_task_ids:
             return []
@@ -153,7 +153,6 @@ class TaskRunner:
             return []
         if not hasattr(self.memory_manager, "get_memories_by_task_ids"):
             return []
-
         return self.memory_manager.get_memories_by_task_ids(
             task_ids=support_task_ids,
             task_context=task_context,
@@ -162,9 +161,9 @@ class TaskRunner:
 
     @staticmethod
     def _merge_memory_items(
-            support_items: List[Dict[str, Any]],
-            retrieved_items: List[Dict[str, Any]],
-            limit: int,
+        support_items: List[Dict[str, Any]],
+        retrieved_items: List[Dict[str, Any]],
+        limit: int,
     ) -> List[Dict[str, Any]]:
         """
         合并 support-aware memory 与普通 retrieval memory：
@@ -183,22 +182,18 @@ class TaskRunner:
             task_id = item.get("task_id")
             text = item.get("memory_summary") or item.get("content", "")
             norm_text = _norm_text(text)
-
             if task_id and task_id in seen_task_ids:
                 continue
             if norm_text and norm_text in seen_texts:
                 continue
 
             merged.append(item)
-
             if task_id:
                 seen_task_ids.add(task_id)
             if norm_text:
                 seen_texts.add(norm_text)
-
             if len(merged) >= limit:
                 break
-
         return merged
 
     def _maybe_log_profile(
@@ -252,7 +247,6 @@ class TaskRunner:
 
         wall_start = time.perf_counter()
         task_start_time = datetime.now()
-
         task_run_id = self.mysql_logger.log_task_run(
             experiment_id=self.experiment_id,
             task_id=task_id,
@@ -260,7 +254,6 @@ class TaskRunner:
             query_text=query,
             task_start_time=task_start_time.strftime("%Y-%m-%d %H:%M:%S"),
         )
-
         task_context = TaskContext(
             experiment_id=self.experiment_id,
             task_id=task_id,
@@ -286,8 +279,6 @@ class TaskRunner:
             self.knowledge_base.set_runtime_context(None)
 
         t_retrieve_start = time.perf_counter()
-
-        # 先做 support-aware direct memory injection，再做普通 retrieval 补充
         if task_type == "decomposition_qa":
             effective_top_k = min(self.memory_top_k, 2)
         else:
@@ -298,10 +289,8 @@ class TaskRunner:
             task_context=task_context,
             limit=effective_top_k,
         )
-
         raw_support_memory_items = support_memory_items
         support_memory_items = self._filter_support_memories(support_memory_items)
-
         retrieved_memory_items = self._retrieve_memories(
             query=query,
             task_context=task_context,
@@ -309,7 +298,6 @@ class TaskRunner:
             task_entity=entity,
             final_top_k=effective_top_k,
         )
-
         memory_items = self._merge_memory_items(
             support_items=support_memory_items,
             retrieved_items=retrieved_memory_items,
@@ -324,7 +312,6 @@ class TaskRunner:
                 memory_content=self._format_memory_items(raw_support_memory_items),
                 relevance_score=raw_support_memory_items[0].get("score"),
             )
-
         if support_memory_items:
             self.mysql_logger.log_memory(
                 task_run_id=task_run_id,
@@ -335,10 +322,8 @@ class TaskRunner:
             )
 
         t_retrieve_end = time.perf_counter()
-
         memories = [item.get("content", "") for item in memory_items]
         formatted_memories = self._format_memory_items(memory_items)
-
         if self.ablation_cfg.get("use_memory_logging", True):
             self.mysql_logger.log_memory(
                 task_run_id=task_run_id,
@@ -367,9 +352,7 @@ class TaskRunner:
                 "仅在确有必要时调用知识检索工具。"
             )
         else:
-            task_instruction = (
-                "必要时调用知识检索工具，并结合历史经验完成当前任务。"
-            )
+            task_instruction = "必要时调用知识检索工具，并结合历史经验完成当前任务。"
 
         user_prompt = (
             f"当前任务:\n{query}\n\n"
@@ -381,7 +364,6 @@ class TaskRunner:
             f"〖记忆摘要〗不超过80字，只保留以后可复用的结论。\n"
             f"〖策略备注〗1句话。\n"
         )
-
         t_compose_end = time.perf_counter()
 
         self.mysql_logger.log_trajectory(
@@ -401,14 +383,12 @@ class TaskRunner:
         )
 
         msg = Msg(name="user", content=user_prompt, role="user")
-
         t_agent_start = time.perf_counter()
         response = await self.agent(msg)
         t_agent_end = time.perf_counter()
 
         raw_answer = extract_text_from_response(response)
         parsed = parse_structured_answer(raw_answer)
-
         final_answer = parsed["final_answer"].strip()
         memory_summary = parsed["memory_summary"].strip()
         strategy_note = parsed["strategy_note"].strip()
@@ -438,23 +418,38 @@ class TaskRunner:
             meta=meta,
         )
 
+        gate_result = assess_memory_quality(
+            query=query,
+            final_answer=final_answer,
+            memory_summary=memory_summary,
+            task_type=task_type,
+            cfg=self.quality_gate_cfg,
+        )
+        memory_record.memory_quality = gate_result["memory_quality"]
+        memory_record.contains_placeholder = gate_result["contains_placeholder"]
+        memory_record.contains_unknown = gate_result["contains_unknown"]
+        memory_record.gate_passed = gate_result["gate_passed"]
+        memory_record.gate_reason = gate_result["gate_reason"]
+
         self.mysql_logger.log_memory(
             task_run_id=task_run_id,
             memory_key=f"task:{task_id}:write_candidate",
             operation_type="write_candidate",
-            memory_content=memory_record.to_log_text(),
+            memory_content=json.dumps(memory_record.to_log_dict(), ensure_ascii=False),
             relevance_score=None,
         )
 
-        should_write = True
+        policy_allow = True
         if self.memory_policy is not None:
-            should_write = self.memory_policy.should_write_memory(
+            policy_allow = self.memory_policy.should_write_memory(
                 query=query,
                 task_context=task_context,
                 final_answer=final_answer,
                 memory_summary=memory_summary,
                 strategy_note=strategy_note,
             )
+        quality_allow = memory_record.gate_passed
+        should_write = policy_allow and quality_allow
 
         t_memory_write_start = time.perf_counter()
         memory_written = False
@@ -470,13 +465,28 @@ class TaskRunner:
                 task_run_id=task_run_id,
                 memory_key=f"task:{task_id}:write",
                 operation_type="write",
-                memory_content=memory_record.to_log_text(),
+                memory_content=json.dumps(memory_record.to_log_dict(), ensure_ascii=False),
+                relevance_score=None,
+            )
+        elif not quality_allow:
+            self.mysql_logger.log_memory(
+                task_run_id=task_run_id,
+                memory_key=f"task:{task_id}:write_skip_quality",
+                operation_type="write_skip_quality",
+                memory_content=json.dumps(memory_record.to_log_dict(), ensure_ascii=False),
+                relevance_score=None,
+            )
+        elif not policy_allow:
+            self.mysql_logger.log_memory(
+                task_run_id=task_run_id,
+                memory_key=f"task:{task_id}:write_skip_policy",
+                operation_type="write_skip_policy",
+                memory_content=json.dumps(memory_record.to_log_dict(), ensure_ascii=False),
                 relevance_score=None,
             )
         t_memory_write_end = time.perf_counter()
 
         latency_ms = int((time.perf_counter() - wall_start) * 1000)
-
         policy_result = None
         if self.memory_policy is not None:
             policy_result = self.memory_policy.on_task_end(
@@ -542,14 +552,11 @@ class TaskRunner:
             "profile": profile,
         }
 
-    def _filter_support_memories(
-            self,
-            support_items: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+    def _filter_support_memories(self, support_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         过滤掉明显低质量的 support memory：
-        1. 未知/未提供/无法确定/需进一步查询
-        2. 明显占位符答案（如 #1、#2、#3）
+        1. 优先读结构化标签
+        2. 向后兼容旧 memory bank 的文本规则
         """
         bad_patterns = [
             "未知",
@@ -562,23 +569,25 @@ class TaskRunner:
             "信息未说明",
             "尚不清楚",
         ]
+        placeholder_tokens = ["#1", "#2", "#3", "#4", "#5"]
 
         filtered = []
         for item in support_items:
-            text = (item.get("memory_summary") or item.get("content") or "").strip()
+            if item.get("contains_placeholder") is True:
+                continue
+            if item.get("contains_unknown") is True:
+                continue
+            if item.get("memory_quality") == "reject":
+                continue
+            if item.get("gate_passed") is False:
+                continue
 
+            text = (item.get("memory_summary") or item.get("content") or "").strip()
             if not text:
                 continue
-
-            # 低质量 / 不可用结论
             if any(p in text for p in bad_patterns):
                 continue
-
-            # 占位符型信息，通常说明 subq 还没有被真正解析为实体
-            placeholder_tokens = ["#1", "#2", "#3", "#4", "#5"]
             if any(tok in text for tok in placeholder_tokens):
                 continue
-
             filtered.append(item)
-
         return filtered
