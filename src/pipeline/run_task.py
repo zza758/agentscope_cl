@@ -118,7 +118,8 @@ class TaskRunner:
             base_score = item.get("score")
             rerank_score = item.get("contrastive_score")
             policy_score = item.get("policy_score")
-            parts = [f"[历史经验{idx}"]
+            tag = "支持经验" if item.get("is_support_memory") else "历史经验"
+            parts = [f"[{tag}{idx}"]
             if base_score is not None:
                 parts.append(f"base={base_score:.4f}")
             if rerank_score is not None:
@@ -136,6 +137,66 @@ class TaskRunner:
             lines.append(f"{prefix}{meta_text} {item.get('content', '')}")
 
         return "\n".join(lines)
+
+    def _get_support_memories(
+            self,
+            support_task_ids: List[str],
+            task_context: TaskContext,
+            limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        if not support_task_ids:
+            return []
+        if self.memory_manager is None:
+            return []
+        if not hasattr(self.memory_manager, "get_memories_by_task_ids"):
+            return []
+
+        return self.memory_manager.get_memories_by_task_ids(
+            task_ids=support_task_ids,
+            task_context=task_context,
+            limit=limit,
+        )
+
+    @staticmethod
+    def _merge_memory_items(
+            support_items: List[Dict[str, Any]],
+            retrieved_items: List[Dict[str, Any]],
+            limit: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        合并 support-aware memory 与普通 retrieval memory：
+        1. support memory 永远优先
+        2. 按 task_id + 规范化文本去重
+        3. 最终截断到 limit
+        """
+        merged: List[Dict[str, Any]] = []
+        seen_task_ids = set()
+        seen_texts = set()
+
+        def _norm_text(x: str) -> str:
+            return " ".join((x or "").strip().split()).lower()
+
+        for item in support_items + retrieved_items:
+            task_id = item.get("task_id")
+            text = item.get("memory_summary") or item.get("content", "")
+            norm_text = _norm_text(text)
+
+            if task_id and task_id in seen_task_ids:
+                continue
+            if norm_text and norm_text in seen_texts:
+                continue
+
+            merged.append(item)
+
+            if task_id:
+                seen_task_ids.add(task_id)
+            if norm_text:
+                seen_texts.add(norm_text)
+
+            if len(merged) >= limit:
+                break
+
+        return merged
 
     def _maybe_log_profile(
         self,
@@ -222,13 +283,43 @@ class TaskRunner:
             self.knowledge_base.set_runtime_context(None)
 
         t_retrieve_start = time.perf_counter()
-        memory_items = self._retrieve_memories(
+
+        # 先做 support-aware direct memory injection，再做普通 retrieval 补充
+        if task_type == "decomposition_qa":
+            effective_top_k = min(self.memory_top_k, 2)
+        else:
+            effective_top_k = max(self.memory_top_k, 4)
+
+        support_memory_items = self._get_support_memories(
+            support_task_ids=support_task_ids,
+            task_context=task_context,
+            limit=effective_top_k,
+        )
+
+        retrieved_memory_items = self._retrieve_memories(
             query=query,
             task_context=task_context,
             task_type=task_type,
             task_entity=entity,
         )
+
+        memory_items = self._merge_memory_items(
+            support_items=support_memory_items,
+            retrieved_items=retrieved_memory_items,
+            limit=effective_top_k,
+        )
+
         t_retrieve_end = time.perf_counter()
+
+        if support_memory_items:
+            support_formatted = self._format_memory_items(support_memory_items)
+            self.mysql_logger.log_memory(
+                task_run_id=task_run_id,
+                memory_key=f"task:{task_id}:support_retrieve",
+                operation_type="support_retrieve",
+                memory_content=support_formatted,
+                relevance_score=support_memory_items[0].get("score"),
+            )
 
         memories = [item.get("content", "") for item in memory_items]
         formatted_memories = self._format_memory_items(memory_items)

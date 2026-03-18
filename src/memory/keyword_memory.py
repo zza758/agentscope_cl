@@ -262,3 +262,86 @@ class KeywordMemoryManager(BaseMemoryManager):
                 dedup_map[norm_text] = item
 
         return list(dedup_map.values())
+
+    def _build_item_from_memory_record(
+            self,
+            mem: Dict[str, Any],
+            score: float,
+            support_rank: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        content = mem.get("memory_summary", mem.get("content", ""))
+        item = {
+            "experiment_id": mem.get("experiment_id"),
+            "stream_id": mem.get("stream_id"),
+            "task_id": mem.get("task_id"),
+            "task_order": mem.get("task_order"),
+            "query": mem.get("query"),
+            "content": content,
+            "score": float(score),
+            "base_score": float(score),
+            "meta_score": 0.0,
+            "created_at": mem.get("created_at"),
+            "answer_raw": mem.get("answer_raw", ""),
+            "memory_summary": mem.get("memory_summary", content),
+            "strategy_note": mem.get("strategy_note", ""),
+            "task_type": mem.get("task_type"),
+            "entity": mem.get("entity"),
+            "support_task_ids": mem.get("support_task_ids", []),
+            "source_dataset": mem.get("source_dataset"),
+            "source_sample_id": mem.get("source_sample_id"),
+            "meta": mem.get("meta", {}),
+            "is_support_memory": support_rank is not None,
+            "support_rank": support_rank,
+        }
+        return item
+
+    def get_memories_by_task_ids(
+            self,
+            task_ids: List[str],
+            task_context: TaskContext,
+            limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        根据 support_task_ids 直接取回合法历史 memory。
+        只返回当前任务开始前、同实验（以及若你已在 history_guard 中实现，则同 stream）
+        的合法历史记录。
+        """
+        if not task_ids:
+            return []
+
+        task_id_order = {task_id: idx for idx, task_id in enumerate(task_ids)}
+        matched: List[Dict[str, Any]] = []
+
+        for mem in self._memory_bank:
+            mem_task_id = mem.get("task_id")
+            if mem_task_id not in task_id_order:
+                continue
+
+            if not is_legal_history_record(mem, task_context):
+                continue
+
+            support_rank = task_id_order[mem_task_id]
+            # support memory 强优先，给一个显著高于普通 retrieval 的分数
+            score = 1000.0 - float(support_rank)
+
+            matched.append(
+                self._build_item_from_memory_record(
+                    mem=mem,
+                    score=score,
+                    support_rank=support_rank,
+                )
+            )
+
+        matched.sort(
+            key=lambda x: (
+                x.get("support_rank", 10 ** 9),
+                x.get("task_order", 10 ** 9),
+                str(x.get("task_id", "")),
+            )
+        )
+
+        deduped = self._deduplicate_scored_items(matched)
+
+        if limit is not None:
+            deduped = deduped[:limit]
+        return deduped
